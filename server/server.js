@@ -19,8 +19,7 @@ import errorHandler from "./src/middleware/errorHandler.js";
 const app    = express();
 const server = http.createServer(app);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = new URL('.', import.meta.url).pathname;
 // ── CORS origins ──────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
   .split(',')
@@ -35,7 +34,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
-
+const __dirname = new URL('.', import.meta.url).pathname;
 
 
 // ── Request logger (dev only) ─────────────────────────────────────────────────
@@ -78,8 +77,6 @@ app.get('/health', (_req, res) => {
   });
 });
  
-
-
 // Serve static files
 app.use(express.static(path.join(__dirname, "../client/dist")));
 
@@ -87,8 +84,6 @@ app.use(express.static(path.join(__dirname, "../client/dist")));
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, "../client/dist/index.html"));
 });
-
-
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
@@ -126,6 +121,7 @@ const PORT = parseInt(process.env.PORT || '3001');
  
 const start = async () => {
   await db();   // MongoDB (non-blocking — continues even if DB offline)
+
 
 
 
