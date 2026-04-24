@@ -1,0 +1,11 @@
+{
+  "commit_hash": "8f949c8d",
+  "agent_id": "critic",
+  "session_id": "e6a67de2-addd-4424-99bd-091668493d2a",
+  "output": "**Research Flaws**\n  - missing market size\n  - missing growth rate\n  - incomplete raw summary\n**Finance Flaws**\n  - unrealistic assumptions in finance projections\n**Competitor Flaws**\n  - market gaps may not be real\n**Top Risks**\n  - unrealistic projections\n  - inadequate market research\n  - insufficient competitor analysis\n**Confidence Score:** 0.4\n**Reasoning:** The analysis lacks crucial data and makes unrealistic assumptions, indicating a need for more research and caution.",
+  "score": 0.4,
+  "feedback": "Confidence: 0.40 | Round: 1 | Stagnation: 0",
+  "status": "improved",
+  "parent_hash": null,
+  "timestamp": "2026-04-24T09:22:45.802639+00:00"
+}

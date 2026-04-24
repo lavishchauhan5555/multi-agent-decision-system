@@ -1,0 +1,11 @@
+{
+  "commit_hash": "2108e4c8",
+  "agent_id": "critic",
+  "session_id": "c0928027-80fa-45eb-be06-b0de1a63b3b8",
+  "output": "**Research Flaws**\n**Finance Flaws**\n**Competitor Flaws**\n**Top Risks**\n**Confidence Score:** 0.5\n**Reasoning:** No reasoning provided.",
+  "score": 0.5,
+  "feedback": "Confidence: 0.50 | Round: 1 | Stagnation: 0",
+  "status": "improved",
+  "parent_hash": null,
+  "timestamp": "2026-04-24T14:51:49.529916+00:00"
+}

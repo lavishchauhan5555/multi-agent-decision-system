@@ -1,0 +1,10 @@
+{
+  "test-mgr-001": {
+    "agent_ids": [
+      "research",
+      "finance",
+      "critic"
+    ],
+    "stopped_at": 1776754185.9838374
+  }
+}
