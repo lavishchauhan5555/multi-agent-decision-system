@@ -25,7 +25,7 @@ RUN npm install
 # -----------------------------
 # FastAPI (Python)
 # -----------------------------
-WORKDIR /app/ai-logic
+WORKDIR /app/orchestrator
 
 RUN python3 -m venv /app/venv
 RUN /app/venv/bin/pip install --upgrade pip
