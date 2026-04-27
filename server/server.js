@@ -21,7 +21,7 @@ const server = http.createServer(app);
 
 const __dirname = new URL('.', import.meta.url).pathname;
 // ── CORS origins ──────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://multi-agent-decision-system.onrender.com')
   .split(',')
   .map((o) => o.trim());
  
@@ -34,7 +34,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
-const __dirname = new URL('.', import.meta.url).pathname;
+
 
 
 // ── Request logger (dev only) ─────────────────────────────────────────────────

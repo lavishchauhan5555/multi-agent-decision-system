@@ -97,8 +97,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3001",  # Node.js backend
-        "http://localhost:5173",  # React Vite frontend
+        "https://multi-agent-decision-system.onrender.com",  # Node.js backend
+        "https://multi-agent-decision-system.onrender.com",  # React Vite frontend
         "http://localhost:3000",  # CRA frontend
         "*",                      # dev only
     ],

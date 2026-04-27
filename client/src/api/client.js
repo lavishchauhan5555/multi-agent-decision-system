@@ -12,7 +12,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL:         import.meta.env.VITE_API_URL ?? 'http://localhost:3001',
+  baseURL:         import.meta.env.VITE_API_URL ?? 'https://multi-agent-decision-system.onrender.com',
   timeout:         15_000,
   headers:         { 'Content-Type': 'application/json' },
   withCredentials: true,
@@ -84,7 +84,7 @@ export async function getHistory() {
  * This is Node.js, NOT FastAPI.
  */
 export function sseUrl(sessionId) {
-  const base = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
+  const base = import.meta.env.VITE_API_URL ?? 'https://multi-agent-decision-system.onrender.com'
   return `${base}/api/query/stream/${sessionId}`
 }
 
