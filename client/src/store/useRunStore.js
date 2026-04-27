@@ -160,7 +160,7 @@ const useRunStore = create((set, get) => ({
 
   _openStream: (streamOrSession) => {
     const url = streamOrSession.startsWith('/api/')
-      ? `${import.meta.env.VITE_API_URL ?? 'http://localhost:3001'}${streamOrSession}`
+      ? `${import.meta.env.VITE_API_URL ?? 'https://multi-agent-decision-system.onrender.com'}${streamOrSession}`
       : sseUrl(streamOrSession)
 
     const sse = new EventSource(url)
