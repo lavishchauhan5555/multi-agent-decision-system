@@ -181,14 +181,16 @@ async def stream_run(session_id: str):
 
                     session["status"] = "error"
 
-                    yield f"data: {json.dumps({
-                        'session_id': session_id,
-                        'node': '__timeout__',
-                        'timestamp': time.time(),
-                        'data': {
-                            'error': 'Stream closed because graph sent no events for 30 seconds'
-                        }
-                    }, default=str)}\n\n"
+                    timeout_event = {
+                        "session_id": session_id,
+                        "node": "__timeout__",
+                        "timestamp": time.time(),
+                        "data": {
+                            "error": "Stream closed because graph sent no events for 30 seconds"
+                        },
+                    }
+
+                    yield f"data: {json.dumps(timeout_event, default=str)}\n\n"
 
                     break
 
