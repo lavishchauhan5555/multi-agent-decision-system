@@ -17,6 +17,7 @@ Phase 2: if packages not installed, all functions return safe fallbacks.
 from pathlib import Path
 from typing import Optional
 import os
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -170,10 +171,13 @@ def add_documents(documents: list) -> bool:
 
 
 def add_text(text: str, metadata: Optional[dict] = None) -> bool:
-    """Shortcut — add a plain string as a document."""
     try:
         from llama_index.core import Document
-        return add_documents([Document(text=text, metadata=metadata or {})])
+
+        meta = metadata or {}
+        meta["created_at"] = datetime.now(timezone.utc).isoformat()
+
+        return add_documents([Document(text=text, metadata=meta)])
     except ImportError:
         return False
 
@@ -209,3 +213,44 @@ def reset_index() -> bool:
     except Exception as exc:
         print(f"[vector_store] reset error: {exc}")
         return False
+    
+# cleanup function
+
+def cleanup_old_documents(days: int = 15) -> int:
+    """
+    Delete ChromaDB documents older than N days.
+    Returns number of deleted docs.
+    """
+    try:
+        collection = _get_client().get_or_create_collection(COLLECTION_NAME)
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        data = collection.get(
+            include=["metadatas"]
+        )
+
+        ids_to_delete = []
+
+        for doc_id, meta in zip(data["ids"], data["metadatas"]):
+            created_at = meta.get("created_at") if meta else None
+
+            if not created_at:
+                continue  # don't delete old docs without date automatically
+
+            try:
+                created_time = datetime.fromisoformat(created_at)
+                if created_time < cutoff:
+                    ids_to_delete.append(doc_id)
+            except Exception:
+                continue
+
+        if ids_to_delete:
+            collection.delete(ids=ids_to_delete)
+
+        print(f"[vector_store] Cleaned {len(ids_to_delete)} old documents")
+        return len(ids_to_delete)
+
+    except Exception as exc:
+        print(f"[vector_store] cleanup error: {exc}")
+        return 0    

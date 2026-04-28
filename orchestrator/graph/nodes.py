@@ -33,6 +33,7 @@ import json
 import re
 import time
 from typing import Any
+from datetime import datetime
 
 from graph.state import AgentState
 from graph.structured_outputs import (
@@ -77,27 +78,219 @@ def unwrap_ai_text(raw: Any) -> str:
     return str(raw)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HELPERS function only for resherch node
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _run_one_research_search(tools: list, query: str) -> str:
+    """
+    Enforces exactly one research search call.
+    Does not depend on the LLM choosing a tool.
+    """
+    search_tool = next(
+        (
+            t for t in tools
+            if getattr(t, "name", None) in ["duckduckgo_results_json", "duckduckgo_search"]
+        ),
+        None
+    )
+
+    if search_tool is None:
+        return "Search tool unavailable."
+
+    search_query = (
+        f"{query} market size CAGR growth trends competitors key players 2026"
+    )
+
+    try:
+        if hasattr(search_tool, "ainvoke"):
+            result = await search_tool.ainvoke({"query": search_query})
+        else:
+            result = await asyncio.to_thread(search_tool.invoke, {"query": search_query})
+
+        text = unwrap_ai_text(result)
+        return text[:8000]
+
+    except Exception as exc:
+        return f"Search failed: {exc}"
+    
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: exactly one current competitor search
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _run_one_competitor_search(tools: list, query: str) -> str:
+    current_year = datetime.now().year
+
+    search_tool = next(
+        (
+            t for t in tools
+            if getattr(t, "name", None) in [
+                "duckduckgo_results_json",
+                "duckduckgo_search",
+            ]
+        ),
+        None,
+    )
+
+    if search_tool is None:
+        return "Search tool unavailable."
+
+    search_query = (
+        f"{query} real competitors market share funding alternatives "
+        f"startups companies {current_year}"
+    )
+
+    try:
+        payload = {"query": search_query}
+
+        if hasattr(search_tool, "ainvoke"):
+            result = await asyncio.wait_for(search_tool.ainvoke(payload), timeout=30)
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(search_tool.invoke, payload),
+                timeout=30,
+            )
+
+        text = unwrap_ai_text(result)
+        return text[:8000]
+
+    except asyncio.TimeoutError:
+        return "Search failed: timeout"
+    except Exception as exc:
+        return f"Search failed: {exc}"    
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: for citric node
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _run_one_critic_fact_check(tools: list, query: str, research: str, competitor: str) -> str:
+    search_tool = next(
+        (
+            t for t in tools
+            if getattr(t, "name", None) in ["duckduckgo_results_json", "duckduckgo_search"]
+        ),
+        None,
+    )
+
+    if search_tool is None:
+        return "Fact-check search unavailable."
+
+    fact_query = (
+        f"{query} market size competitors funding growth risks latest evidence"
+    )
+
+    try:
+        payload = {"query": fact_query}
+
+        if hasattr(search_tool, "ainvoke"):
+            result = await asyncio.wait_for(search_tool.ainvoke(payload), timeout=30)
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(search_tool.invoke, payload),
+                timeout=30,
+            )
+
+        return unwrap_ai_text(result)[:6000]
+
+    except asyncio.TimeoutError:
+        return "Fact-check search timed out."
+    except Exception as exc:
+        return f"Fact-check search failed: {exc}"
+    
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS:ceo node helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _run_one_ceo_validation_search(tools: list, query: str) -> str:
+    search_tool = next(
+        (
+            t for t in tools
+            if getattr(t, "name", None) in ["duckduckgo_results_json", "duckduckgo_search"]
+        ),
+        None,
+    )
+
+    if search_tool is None:
+        return "Final validation search unavailable."
+
+    search_query = (
+        f"{query} market opportunity risks competitors funding growth latest validation"
+    )
+
+    try:
+        payload = {"query": search_query}
+
+        if hasattr(search_tool, "ainvoke"):
+            result = await asyncio.wait_for(search_tool.ainvoke(payload), timeout=30)
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(search_tool.invoke, payload),
+                timeout=30,
+            )
+
+        return unwrap_ai_text(result)[:6000]
+
+    except asyncio.TimeoutError:
+        return "Final validation search timed out."
+    except Exception as exc:
+        return f"Final validation search failed: {exc}"    
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+# def _safe_content(response) -> str:
+#     """Extract a plain string from any LangChain response object."""
+#     if response is None:
+#         return "[ERROR] LLM returned None"
+
+#     from pydantic import BaseModel as PydanticBase
+#     if isinstance(response, PydanticBase):
+#         return structured_to_markdown(response)
+
+#     if hasattr(response, "content"):
+#         content = response.content
+#         if isinstance(content, list):
+#             parts = [
+#                 block.get("text", "") if isinstance(block, dict) else str(block)
+#                 for block in content
+#             ]
+#             return "\n".join(p for p in parts if p).strip()
+#         return content or ""
+
+#     return str(response)
 def _safe_content(response) -> str:
-    """Extract a plain string from any LangChain response object."""
     if response is None:
         return "[ERROR] LLM returned None"
 
-    from pydantic import BaseModel as PydanticBase
-    if isinstance(response, PydanticBase):
-        return structured_to_markdown(response)
+    content = getattr(response, "content", None)
 
-    if hasattr(response, "content"):
-        content = response.content
-        if isinstance(content, list):
-            parts = [
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            ]
-            return "\n".join(p for p in parts if p).strip()
-        return content or ""
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text") or block.get("content")
+                if text:
+                    parts.append(str(text))
+            else:
+                parts.append(str(block))
+
+        text = "\n".join(parts).strip()
+        if text:
+            return text
+
+    usage = getattr(response, "usage_metadata", None)
+    if usage:
+        return "[ERROR] LLM returned usage metadata but no content"
 
     return str(response)
 
@@ -106,51 +299,73 @@ def _extract_json_candidates(text: str) -> list[str]:
     """Extract possible JSON objects from text using markdown stripping + brace counting."""
     clean = re.sub(r"```(?:json)?\s*", "", text.strip())
     clean = re.sub(r"```", "", clean).strip()
+
+    # ✅ Prefer full outer JSON object first
+    try:
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return [clean]
+    except Exception:
+        pass
+
     candidates: list[str] = []
     i = 0
+
     while i < len(clean):
         if clean[i] == "{":
             depth = 0
             in_string = False
             escape = False
             start = i
+
             for j in range(i, len(clean)):
                 ch = clean[j]
+
                 if escape:
                     escape = False
                     continue
+
                 if ch == "\\":
                     escape = True
                     continue
+
                 if ch == '"':
                     in_string = not in_string
                     continue
+
                 if in_string:
                     continue
+
                 if ch == "{":
                     depth += 1
                 elif ch == "}":
                     depth -= 1
+
                     if depth == 0:
-                        candidates.append(clean[start:j + 1])
+                        candidate = clean[start:j + 1]
+
+                        # ✅ Only keep JSON objects, skip null/list/string/etc
+                        try:
+                            parsed = json.loads(candidate)
+                            if isinstance(parsed, dict):
+                                candidates.append(candidate)
+                        except Exception:
+                            pass
+
                         i = j + 1
                         break
             else:
                 break
         else:
             i += 1
-    if clean.startswith("{") and clean.endswith("}") and clean not in candidates:
-        candidates.append(clean)
+
     candidates.sort(key=len, reverse=True)
     return candidates
 
 
 def _parse_json_response(raw: str, model_class):
-    """
-    Parse model text with LangChain's PydanticOutputParser.
-    No repair LLM call is made here.
-    """
     print(f"[parser] calling PydanticOutputParser for {model_class.__name__}")
+
     if not raw or not isinstance(raw, str):
         return None, "Empty or non-string input"
 
@@ -162,22 +377,35 @@ def _parse_json_response(raw: str, model_class):
     parser = PydanticOutputParser(pydantic_object=model_class)
     text = unwrap_ai_text(raw).strip()
 
+    last_err = "Unknown parse error"
+
+    # ✅ Try full response first
     try:
-        return parser.parse(text), None
-    except Exception as direct_exc:
-        last_err = str(direct_exc)
+        parsed_json = json.loads(text)
+        if isinstance(parsed_json, dict):
+            return parser.parse(text), None
+    except Exception as exc:
+        last_err = str(exc)
 
     candidates = _extract_json_candidates(text)
+
     if not candidates:
         return None, f"No JSON object found in response: {text[:160]}"
 
     for candidate in candidates:
         try:
+            parsed_json = json.loads(candidate)
+
+            # ✅ Skip null, arrays, strings, numbers
+            if not isinstance(parsed_json, dict):
+                continue
+
             return parser.parse(candidate), None
+
         except Exception as exc:
             last_err = str(exc)
 
-    return None, f"All JSON candidates failed PydanticOutputParser validation. Last error: {last_err}"
+    return None, f"All JSON candidates failed validation. Last error: {last_err}"
 
 def _schema_hint(model_class) -> str:
     """
@@ -204,10 +432,13 @@ async def rag_retrieve(query: str) -> list[str]:
         retriever = index.as_retriever(similarity_top_k=3)
         results = await asyncio.to_thread(retriever.retrieve, query)
         docs = []
-        for r in results:
+        for i, r in results:
+            score = getattr(r, "score", None)
             text = getattr(r, "text", None)
             if not text and hasattr(r, "node"):
                 text = r.node.get_content()
+                print(f"[rag_retrieve] result {i+1} score={score}")
+                print(f"[rag_retrieve] text preview={text[:200] if text else 'NO TEXT'}")
             if text:
                 docs.append(text.strip())
         return docs
@@ -452,17 +683,9 @@ def _build_messages(system: str, human: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 1 — Cache Check
 # ─────────────────────────────────────────────────────────────────────────────
+CACHE_THRESHOLD = 0.70
 
 async def cache_check_node(state: AgentState) -> dict:
-    """
-    Semantic cache check via LlamaIndex vector store.
-    No LLM call — pure vector similarity lookup.
-    Threshold: cosine similarity > 0.92
-
-    Output to state:
-        cached_result : str | None   — clean text of the cached decision
-        cache_score   : float
-    """
     query = state["query"]
     print(f"[cache_check] query='{query[:60]}...'")
 
@@ -475,18 +698,25 @@ async def cache_check_node(state: AgentState) -> dict:
             return {"cached_result": None, "cache_score": 0.0}
 
         retriever = index.as_retriever(similarity_top_k=1)
-        results   = await asyncio.to_thread(retriever.retrieve, query)
+        results = await asyncio.to_thread(retriever.retrieve, query)
 
         if results:
-            top   = results[0]
+            top = results[0]
             score = getattr(top, "score", None) or 0.0
-            print(f"[cache_check] top score={score:.4f}")
 
-            if score > 0.92:
+            text = getattr(top, "text", None)
+            if not text and hasattr(top, "node"):
+                text = top.node.get_content()
+
+            print(f"[cache_check] top score={score:.4f}")
+            print(f"[cache_check] threshold={CACHE_THRESHOLD}")
+            print(f"[cache_check] text preview={text[:300] if text else 'NO TEXT'}")
+
+            if score >= CACHE_THRESHOLD:
                 print("[cache_check] CACHE HIT")
                 return {
-                    "cached_result": str(top.text),   # clean string only
-                    "cache_score":   round(score, 4),
+                    "cached_result": text,
+                    "cache_score": round(score, 4),
                 }
 
     except Exception as exc:
@@ -494,7 +724,6 @@ async def cache_check_node(state: AgentState) -> dict:
 
     print("[cache_check] CACHE MISS")
     return {"cached_result": None, "cache_score": 0.0}
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 2 — Research Agent
@@ -529,67 +758,166 @@ async def research_node(state: AgentState) -> dict:
     docs        = await rag_retrieve(query)
     rag_context = "\n---\n".join(docs) if docs else "No external documents found."
 
-    system = (
-    "You are a senior research analyst in a multi-agent AI decision system.\n"
-    "You MUST call exactly ONE search tool before producing the final JSON. "
-    "Use duckduckgo_search or duckduckgo_results_json to gather current market data. "
-    "to gather current market data, statistics, or news.\n\n"
-
-    "CRITICAL RULES:\n"
-    "1. Tool calls are NOT final answers.\n"
-    "2. After tool result, you MUST produce final JSON.\n"
-    "3. Final output MUST be a single JSON object.\n"
-    "4. DO NOT return arrays like [{...}].\n"
-    "5. DO NOT wrap output in {\"type\":\"text\"} or similar.\n"
-    "6. DO NOT include markdown (no ```json).\n"
-    "7. DO NOT include explanations outside JSON.\n\n"
-
-    "FIELD RULES:\n"
-    "- trends, key_players, opportunities, risks, critique_responses MUST be arrays of strings.\n"
-    "- If no data → use ['data unavailable'] for lists.\n"
-    "- market_size, growth_rate, raw_summary MUST be strings.\n\n"
-
-    "FINAL ANSWER FORMAT (STRICT JSON):\n"
-    "{\n"
-    f"{_schema_hint(ResearchOutput)}\n"
-    "}\n"
-)
-
-    human = f"""User Query:
-{query}
-
-Retrieved Knowledge (RAG):
-{rag_context}
-
-Prior Agent Notes (CORAL memory):
-{coral_context}
-
-Critiques to address from last round:
-{critique_context}
-
-Instructions:
-- Include: market size, growth rate, trends, key players, opportunities, risks.
-- Reference specific data points from RAG or tool results.
-- Address every critique from the last round explicitly.
-- Do NOT hallucinate — use "data unavailable" if needed.
-- Return ONLY the JSON object described in the system prompt."""
-
     rt        = _get_runtime()
     tools     = getattr(rt, "tools", []) or []
     base_llm  = getattr(rt, "hf", None) if rt else None
-    llm       = _bind(base_llm, tools)
+    # 🔴 ADD THIS HERE
+    if base_llm is None:
+        return {
+            "research_output": "[STUB] Research LLM not configured",
+            "debate_transcript": [{
+                "agent": "research",
+                "round": state["round"],
+                "content": "[STUB] Research LLM not configured",
+                "timestamp": time.time(),
+            }],
+        }
+    search_context = await _run_one_research_search(tools, query)
 
-    print(f"[research] llm={type(llm).__name__ if llm else 'STUB'} tools={[t.name for t in tools]}")
+    system = (
+    "You are a senior research analyst in a multi-agent AI decision system.\n"
+    "You produce deep, structured, decision-grade market intelligence.\n\n"
 
-    raw_output = await _llm_invoke_with_tools(llm, tools, _build_messages(system, human))
-    raw_output = unwrap_ai_text(raw_output)
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🔧 TOOL USAGE\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "- You will receive external search data in the prompt.\n"
+    "- DO NOT call tools yourself.\n"
+    "- Use provided search results + RAG as primary sources.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🧠 INFORMATION PRIORITY\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "1. RAG knowledge (most reliable)\n"
+    "2. Search results (for freshness)\n"
+    "3. CORAL memory (for improvements)\n\n"
+
+    "- Never hallucinate missing data.\n"
+    "- If unsure → return 'data unavailable'.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "⚠️ CRITIQUE HANDLING\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "- You MUST address ALL critiques explicitly.\n"
+    "- Each critique must map to one improvement.\n"
+    "- Add explanations inside 'critique_responses'.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📊 DEPTH REQUIREMENTS (STRICT)\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "Minimum output quality:\n"
+
+    "- market_size: 2-4 detailed sentences with numbers.\n"
+    "- growth_rate: 2-3 sentences with CAGR or trend.\n"
+    "- trends: EXACTLY 6 items, each 15-30 words.\n"
+    "- key_players: EXACTLY 6 real companies.\n"
+    "- opportunities: EXACTLY 5 items (problem + business angle).\n"
+    "- risks: EXACTLY 5 items (cause + impact).\n"
+    "- evidence_points: 3-6 factual insights (numbers, stats, facts).\n"
+    "- raw_summary: 150-220 words.\n\n"
+
+    "🚫 If any section is too short or generic → output is INVALID.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📊 QUALITY RULES\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "- Use real-world data when possible.\n"
+    "- Avoid generic phrases like 'market is growing'.\n"
+    "- Each bullet must contain reasoning or data.\n"
+    "- Avoid repetition across fields.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "🚫 OUTPUT RULES (CRITICAL)\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "1. Return ONLY a single JSON object.\n"
+    "2. No markdown, no explanations.\n"
+    "3. No extra text before or after JSON.\n"
+    "4. Do NOT wrap JSON in arrays.\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📌 FIELD RULES\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "- trends, key_players, opportunities, risks, critique_responses, evidence_points → arrays of strings\n"
+    "- market_size, growth_rate, raw_summary → strings\n"
+    "- If missing → use 'data unavailable' or ['data unavailable']\n\n"
+
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "📦 OUTPUT FORMAT\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "{\n"
+    f"{_schema_hint(ResearchOutput)}\n"
+    "}"
+    )
+
+    human = f"""
+    User Query:
+    {query}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📚 RAG CONTEXT
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {rag_context}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🌐 SEARCH RESULTS
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {search_context}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🧠 CORAL MEMORY
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {coral_context}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ⚠️ CRITIQUES
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {critique_context}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🎯 TASK
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Generate complete market research covering:
+
+    • Market size  
+    • Growth rate  
+    • Trends  
+    • Key players  
+    • Opportunities  
+    • Risks  
+    • Evidence-backed insights  
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ⚠️ IMPORTANT
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    - Use RAG first, search second.
+    - Do NOT ignore search results.
+    - Do NOT produce short answers.
+    - Every field must meet depth requirements.
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🚫 FINAL INSTRUCTION
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Return ONLY valid JSON.
+    """
+
+
+    # llm       = _bind(base_llm, tools)
+
+    # print(f"[research] llm={type(llm).__name__ if llm else 'STUB'} tools={[t.name for t in tools]}")
+
+    raw_response = await base_llm.ainvoke(_build_messages(system, human))
+
+
+    raw_output = _safe_content(raw_response)
+
+    raw_output = _safe_content(raw_response)
 
     # ── Local Pydantic parse — zero extra LLM calls ───────────────────────────
     structured_output = raw_output
     obj, err = _parse_json_response(raw_output, ResearchOutput)
     if obj:
         structured_output = structured_to_markdown(obj)
-        print("[research] structured extraction OK")
+        
     else:
         print(f"[research] structured extraction failed (using raw): {err}")
 
@@ -603,7 +931,6 @@ Instructions:
         }],
     }
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 3 — Finance Agent
 # ─────────────────────────────────────────────────────────────────────────────
@@ -616,29 +943,63 @@ async def finance_node(state: AgentState) -> dict:
     coral_skills = state.get("coral_skills", [])
 
     critique_context = "\n".join(critiques[-2:]) if critiques else "First round — no critiques yet."
+
     skills_context = "\n".join(
         f"- {s.get('name', '')}: {s.get('content', '')[:200]}"
         for s in coral_skills[:3]
+        if isinstance(s, dict)
     ) if coral_skills else "No reusable skills available."
 
-    # Deterministic finance calculation
-    initial_investment = 10000.0
-    starting_revenue = 5000.0
-    growth_rate = 0.15
-    monthly_cost = 12000.0
+    # ─────────────────────────────────────────────────────────────────────
+    # 1. Finance assumptions
+    # These can come from state later if frontend provides them.
+    # ─────────────────────────────────────────────────────────────────────
+
+    assumptions = {
+        "initial_investment": float(state.get("initial_investment", 10000.0)),
+        "starting_revenue": float(state.get("starting_revenue", 5000.0)),
+        "monthly_growth_rate": float(state.get("monthly_growth_rate", 0.15)),
+        "monthly_fixed_cost": float(state.get("monthly_fixed_cost", 12000.0)),
+        "gross_margin": float(state.get("gross_margin", 0.75)),
+        "estimated_cac": float(state.get("estimated_cac", 800.0)),
+        "months": 12,
+    }
+
+    initial_investment = assumptions["initial_investment"]
+    starting_revenue = assumptions["starting_revenue"]
+    monthly_growth_rate = assumptions["monthly_growth_rate"]
+    monthly_fixed_cost = assumptions["monthly_fixed_cost"]
+    gross_margin = assumptions["gross_margin"]
+    estimated_cac = assumptions["estimated_cac"]
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 2. Deterministic calculations
+    # No LLM arithmetic.
+    # ─────────────────────────────────────────────────────────────────────
 
     monthly_projections = []
-    cumulative_net = -initial_investment
+    cumulative_cashflow = -initial_investment
     payback_months = None
+    break_even_month = None
+    max_monthly_burn = 0.0
 
     for month in range(1, 13):
-        revenue = round(starting_revenue * ((1 + growth_rate) ** (month - 1)), 2)
-        cost = monthly_cost
-        net = round(revenue - cost, 2)
+        revenue = round(starting_revenue * ((1 + monthly_growth_rate) ** (month - 1)), 2)
 
-        cumulative_net += net
+        # Gross-profit-aware model
+        gross_profit = round(revenue * gross_margin, 2)
+        cost = round(monthly_fixed_cost, 2)
+        net = round(gross_profit - cost, 2)
 
-        if payback_months is None and cumulative_net >= 0:
+        cumulative_cashflow = round(cumulative_cashflow + net, 2)
+
+        if net < 0:
+            max_monthly_burn = max(max_monthly_burn, abs(net))
+
+        if break_even_month is None and net >= 0:
+            break_even_month = month
+
+        if payback_months is None and cumulative_cashflow >= 0:
             payback_months = float(month)
 
         monthly_projections.append({
@@ -649,9 +1010,16 @@ async def finance_node(state: AgentState) -> dict:
         })
 
     total_revenue = round(sum(m["revenue"] for m in monthly_projections), 2)
-    total_cost = round(sum(m["cost"] for m in monthly_projections), 2)
-    net_profit = round(total_revenue - total_cost, 2)
-    roi_percent = round((net_profit / total_cost) * 100, 2)
+    operating_cost = round(sum(m["cost"] for m in monthly_projections), 2)
+
+    total_cost = round(operating_cost + initial_investment, 2)
+
+    # Net profit after operating costs + initial investment
+    net_profit = round(sum(m["net"] for m in monthly_projections) - initial_investment, 2)
+
+    roi_percent = round((net_profit / total_cost) * 100, 2) if total_cost else 0.0
+
+    estimated_runway_needed = round(initial_investment + max_monthly_burn * 6, 2)
 
     base_finance_json = {
         "initial_investment": initial_investment,
@@ -663,93 +1031,183 @@ async def finance_node(state: AgentState) -> dict:
         "payback_months": payback_months,
     }
 
+    # ─────────────────────────────────────────────────────────────────────
+    # 3. Deterministic recommendation
+    # ─────────────────────────────────────────────────────────────────────
+
+    if net_profit > 0 and roi_percent >= 20 and payback_months is not None:
+        deterministic_recommendation = (
+            "GO — positive net profit, ROI above 20%, and payback visible within 12 months."
+        )
+    elif net_profit > 0 and payback_months is not None:
+        deterministic_recommendation = (
+            "CONDITIONAL GO — profitable, but ROI and payback quality should be improved before aggressive scaling."
+        )
+    elif net_profit < 0 and payback_months is None:
+        deterministic_recommendation = (
+            "NO-GO — projected 12-month ROI is negative and payback is not reached."
+        )
+    else:
+        deterministic_recommendation = (
+            "CONDITIONAL GO — proceed only after reducing fixed costs, validating CAC, and improving payback."
+        )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 4. Safe deterministic fallback object
+    # ─────────────────────────────────────────────────────────────────────
+
+    fallback_obj = FinanceOutput(
+        **base_finance_json,
+        financial_risks=[
+            (
+                f"Payback risk: payback_months={payback_months}, meaning the business "
+                "does not clearly recover its initial investment within the modeled period."
+            ),
+            (
+                f"CAC risk: estimated CAC is ${estimated_cac}, but customer acquisition cost "
+                "is not directly deducted from monthly projections, so real profit may be lower."
+            ),
+            (
+                f"Burn risk: maximum monthly burn is approximately ${max_monthly_burn}, "
+                f"so estimated runway needed is about ${estimated_runway_needed}."
+            ),
+        ],
+        recommendation=deterministic_recommendation,
+        critique_responses=[
+            "Used deterministic calculations for all financial numbers instead of relying on LLM arithmetic.",
+            "Included initial investment in total cost and ROI calculation.",
+            "Added gross-margin-aware net calculation, payback risk, CAC risk, burn risk, and runway context.",
+        ],
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 5. LLM only enriches risks/recommendation text
+    # It must not change numbers.
+    # ─────────────────────────────────────────────────────────────────────
+
     system = (
-        "You are a finance analyst in a multi-agent AI decision system.\n"
-        "You MUST NOT call any tools.\n"
-        "Use the provided deterministic finance calculations exactly.\n"
-        "Your job is only to add financial_risks, recommendation, and critique_responses.\n\n"
+        "You are a senior startup finance analyst in a multi-agent AI decision system.\n"
+        "You MUST NOT call tools.\n"
+        "You MUST NOT perform new calculations.\n"
+        "Use the provided deterministic finance calculations exactly.\n\n"
 
         "CRITICAL RULES:\n"
-        "1. Final response must be ONLY valid JSON.\n"
-        "2. Do not return markdown.\n"
-        "3. Do not return explanations outside JSON.\n"
-        "4. Do not call calculator or search tools.\n"
+        "1. Return ONLY valid JSON.\n"
+        "2. No markdown.\n"
+        "3. No explanation outside JSON.\n"
+        "4. Do not call calculator, search, Python, or any tool.\n"
         "5. monthly_projections must contain exactly 12 items.\n"
-        "6. financial_risks must contain exactly 3 strings.\n"
-        "7. recommendation must be one of: GO, NO-GO, CONDITIONAL GO, with short reason.\n\n"
+        "6. Do not change any numeric values.\n"
+        "7. financial_risks must contain exactly 3 detailed strings.\n"
+        "8. critique_responses must be an array of strings.\n"
+        "9. recommendation must be one of: GO, NO-GO, CONDITIONAL GO, followed by a short reason.\n\n"
+
+        "DECISION LOGIC:\n"
+        "- If ROI is negative and payback_months is null, prefer NO-GO.\n"
+        "- If profit is positive but risk is high, use CONDITIONAL GO.\n"
+        "- Use GO only when profit, ROI, and payback are strong.\n\n"
 
         "Return JSON matching this schema:\n"
         f"{_schema_hint(FinanceOutput)}"
     )
 
-    human = f"""Business Idea:
+    human = f"""
+Business Idea:
 {query}
 
 Available Reusable Skills:
 {skills_context}
 
-Critiques to address:
+Critiques to Address:
 {critique_context}
+
+Assumptions Used:
+{json.dumps(assumptions, indent=2)}
+
+Extra Deterministic Metrics:
+{json.dumps({
+    "break_even_month": break_even_month,
+    "max_monthly_burn": max_monthly_burn,
+    "estimated_runway_needed": estimated_runway_needed,
+    "operating_cost": operating_cost,
+    "gross_margin": gross_margin,
+    "estimated_cac": estimated_cac
+}, indent=2)}
 
 Deterministic Finance Calculations:
 {json.dumps(base_finance_json, indent=2)}
 
-Now return a complete FinanceOutput JSON object.
-Use the exact numbers above.
-Only add:
+Required:
+Return a complete FinanceOutput JSON object.
+
+You MUST use the exact numeric values from Deterministic Finance Calculations.
+Only improve:
 - financial_risks
 - recommendation
 - critique_responses
 """
 
+    # ─────────────────────────────────────────────────────────────────────
+    # 6. Runtime model
+    # IMPORTANT: build_agent() must store plain models, not bind_tools().
+    # ─────────────────────────────────────────────────────────────────────
+
     rt = _get_runtime()
     base_llm = getattr(rt, "hf", None) if rt else None
 
-    # IMPORTANT: do NOT bind tools for finance final JSON
-    llm = base_llm
+    print(
+        f"[finance] llm={type(base_llm).__name__ if base_llm else 'STUB'} "
+        "tools=DISABLED_FOR_FINANCE"
+    )
 
-    print(f"[finance] llm={type(llm).__name__ if llm else 'STUB'} tools=DISABLED_FOR_FINANCE")
+    obj = fallback_obj
 
-    if llm is None:
-        obj = FinanceOutput(
-            **base_finance_json,
-            financial_risks=[
-                "Revenue growth assumptions may be too optimistic.",
-                "Operating costs may exceed early-stage revenue.",
-                "Customer acquisition costs are not included.",
-            ],
-            recommendation="CONDITIONAL GO based on modest profitability and execution risk.",
-            critique_responses=[],
-        )
-    else:
-        response = await llm.ainvoke(_build_messages(system, human))
-        raw_output = unwrap_ai_text(_safe_content(response))
-
-        obj, err = _parse_json_response(raw_output, FinanceOutput)
-
-        if not obj:
-            print(f"[finance] LLM structured parse failed, using deterministic fallback: {err}")
-
-            obj = FinanceOutput(
-                **base_finance_json,
-                financial_risks=[
-                    "Revenue growth assumptions may be too optimistic.",
-                    "Operating costs may exceed early-stage revenue.",
-                    "Customer acquisition costs are not included.",
-                ],
-                recommendation="CONDITIONAL GO based on deterministic 12-month projection and execution risk.",
-                critique_responses=[],
+    if base_llm is not None:
+        try:
+            response = await asyncio.wait_for(
+                base_llm.ainvoke(_build_messages(system, human)),
+                timeout=60,
             )
+
+            raw_output = unwrap_ai_text(_safe_content(response))
+            print("[finance] raw_output preview:", raw_output[:500])
+
+            parsed_obj, err = _parse_json_response(raw_output, FinanceOutput)
+
+            if parsed_obj:
+                obj = parsed_obj
+
+                # Safety: force deterministic numbers even if LLM changed them
+                obj.initial_investment = base_finance_json["initial_investment"]
+                obj.monthly_projections = base_finance_json["monthly_projections"]
+                obj.total_revenue = base_finance_json["total_revenue"]
+                obj.total_cost = base_finance_json["total_cost"]
+                obj.net_profit = base_finance_json["net_profit"]
+                obj.roi_percent = base_finance_json["roi_percent"]
+                obj.payback_months = base_finance_json["payback_months"]
+
+            else:
+                print(f"[finance] LLM structured parse failed, using fallback: {err}")
+                obj = fallback_obj
+
+        except Exception as exc:
+            print(f"[finance] LLM failed, using fallback: {exc}")
+            obj = fallback_obj
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 7. Final output
+    # ─────────────────────────────────────────────────────────────────────
 
     structured_output = structured_to_markdown(obj)
 
-    print(
-        f"[finance] structured OK — ROI={obj.roi_percent:.1f}% "
-        f"payback={obj.payback_months} months"
-    )
+
 
     return {
         "finance_output": structured_output,
+
+        # Optional but useful for frontend/CEO/critic if your AgentState allows it
+        "finance_json": obj.model_dump(),
+
         "debate_transcript": [{
             "agent": "finance",
             "round": state["round"],
@@ -758,105 +1216,195 @@ Only add:
         }],
     }
 
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# NODE 4 — Competitor Agent
+# NODE 4 — Production Competitor Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def competitor_node(state: AgentState) -> dict:
-    """
-    Competitor analysis agent.
+   
 
-    Call budget:
-        LLM call 1  → prompt + optional competitor search tool call
-        Tool call   → at most 1
-        LLM call 2  → produces final JSON text
-        Pydantic    → local PydanticOutputParser.parse()
-    Total: 2 LLM calls, ≤1 tool call, 0 extra extraction calls.
+    query = state["query"]
+    coral_notes = state.get("coral_notes", [])
+    critiques = state.get("critiques", [])
 
-    Input from state  : query (str), coral_notes (list[str]), critiques (list[str])
-    Output to state   : competitor_output (str), competitors_list (list[str]),
-                        debate_transcript entry
-    """
-    print(f"[competitor] round={state['round']}")
+    never_worked = [
+        n for n in coral_notes
+        if isinstance(n, str) and ("never" in n.lower() or "failed" in n.lower())
+    ]
 
-    query        = state["query"]
-    coral_notes  = state.get("coral_notes", [])
-    critiques    = state.get("critiques", [])
+    avoid_context = "\n".join(never_worked[:3]) if never_worked else "None recorded yet."
+    critique_context = "\n".join(critiques[-2:]) if critiques else "First round — no critiques yet."
 
-    never_worked     = [n for n in coral_notes if "never" in n.lower() or "failed" in n.lower()]
-    avoid_context    = "\n".join(never_worked[:3]) if never_worked else "None recorded yet."
-    critique_context = "\n".join(critiques[-2:]) if critiques else "First round."
+    rt = _get_runtime()
+    tools = getattr(rt, "tools", []) or []
+
+    # Use plain model. Do NOT use bound tool model here.
+    base_llm = getattr(rt, "hf", None) if rt else None
+
+    if base_llm is None:
+        fallback_obj = CompetitorOutput(
+            competitors=[],
+            market_gaps=[],
+            differentiation_strategy="Competitor LLM not configured.",
+            approaches_to_avoid=["No failed approach recorded"],
+            critique_responses=["Competitor analysis used fallback because LLM was unavailable."],
+            evidence_points=["Search and LLM unavailable."],
+        )
+
+        structured_output = structured_to_markdown(fallback_obj)
+
+        return {
+            "competitor_output": structured_output,
+            "competitors_list": [c.name for c in fallback_obj.competitors],
+            "debate_transcript": [{
+                "agent": "competitor",
+                "round": state["round"],
+                "content": structured_output,
+                "timestamp": time.time(),
+            }],
+        }
+
+    search_context = await _run_one_competitor_search(tools, query)
+
+    current_year = datetime.now().year
 
     system = (
-        "You are a market research analyst in a multi-agent AI decision system.\n"
-        "You MUST call exactly ONE search tool before producing final JSON. "
-        "Use duckduckgo_search or duckduckgo_results_json to verify competitors."
-        "and to gather accurate market share or funding data.\n"
-        "Only name companies you are confident are real.\n\n"
-        "After any tool result (or immediately if no tool is needed), "
-        "respond with ONLY a JSON object matching this exact schema — "
-        "no preamble, no markdown fences:\n"
-        "{\n"
-        f"{_schema_hint(CompetitorOutput)}\n"
-        "}"
+        "You are a senior competitive intelligence analyst in a multi-agent AI decision system.\n"
+        "You produce current, evidence-backed competitor analysis for startup decisions.\n\n"
+
+        "TOOL RULES:\n"
+        "- You will receive external search results in the prompt.\n"
+        "- DO NOT call tools yourself.\n"
+        "- Use the provided search results to verify current competitors.\n\n"
+
+        "CURRENTNESS RULES:\n"
+        f"- Prefer data from {current_year - 1} and {current_year}.\n"
+        "- Avoid outdated competitors unless they are still active and relevant.\n"
+        "- If market share or funding is not verifiable, use 'unknown'.\n\n"
+
+        "STRICT COMPETITOR RULES:\n"
+        "- Only include real companies.\n"
+        "- Do not invent market share, funding, or traction.\n"
+        "- Each competitor must have 2-3 strengths and 2-3 weaknesses.\n"
+        "- Identify 3-5 competitors.\n"
+        "- Identify 2-3 market gaps.\n"
+        "- differentiation_strategy must be 2-4 detailed sentences.\n"
+        "- evidence_points must include 3-6 specific facts from search/RAG.\n\n"
+
+        "CRITIQUE RULES:\n"
+        "- Address every critique explicitly in critique_responses.\n"
+        "- Use approaches_to_avoid from CORAL memory.\n\n"
+
+        "OUTPUT RULES:\n"
+        "- Return ONLY valid JSON.\n"
+        "- No markdown.\n"
+        "- No explanation outside JSON.\n"
+        "- Do not wrap JSON in an array.\n\n"
+
+        "Return JSON matching this schema:\n"
+        f"{_schema_hint(CompetitorOutput)}"
     )
 
-    human = f"""Business Idea:
+    human = f"""
+Business Idea:
 {query}
 
-Approaches to AVOID (CORAL memory — already failed):
+Current Search Results:
+{search_context}
+
+Approaches to Avoid from CORAL Memory:
 {avoid_context}
 
-Critiques to address from last round:
+Critiques to Address:
 {critique_context}
 
 Task:
-1. Identify 3-5 REAL competitors in this space.
-2. For each competitor provide: name, description, strengths, weaknesses,
-   known market share or funding (state "unknown" if not verifiable).
-3. Identify 2-3 genuine market gaps.
-4. Suggest a concrete differentiation strategy.
+Generate a production-grade competitor analysis.
 
-Do NOT fabricate statistics. Use a search tool to verify claims.
-Return ONLY the JSON object described in the system prompt."""
+Required:
+- 3-5 real competitors
+- 2-3 strengths per competitor
+- 2-3 weaknesses per competitor
+- market_share_or_funding if verifiable, otherwise "unknown"
+- 2-3 market gaps
+- 2-4 sentence differentiation strategy
+- approaches_to_avoid as list
+- critique_responses as list
+- evidence_points as list
 
-    rt    = _get_runtime()
-    tools = getattr(rt, "tools", []) or []
-    base_llm  = getattr(rt, "hf", None) if rt else None
-    llm       = _bind(base_llm, tools)
+Return ONLY valid JSON.
+"""
 
-    print(f"[competitor] llm={type(llm).__name__ if llm else 'STUB'} tools={[t.name for t in tools]}")
 
-    raw_output = await _llm_invoke_with_tools(llm, tools, _build_messages(system, human))
-    raw_output = unwrap_ai_text(raw_output)
 
-    # ── Local Pydantic parse — zero extra LLM calls ───────────────────────────
-    structured_output = raw_output
-    competitors_list: list[str] = []
+    fallback_obj = CompetitorOutput(
+        competitors=[],
+        market_gaps=[
+            "Reliable competitor data unavailable from model output.",
+            "Manual validation required before final business decision.",
+        ],
+        differentiation_strategy=(
+            "Use a focused niche strategy until competitor positioning is verified. "
+            "Avoid broad positioning without validated market evidence."
+        ),
+        approaches_to_avoid=[avoid_context],
+        critique_responses=[
+            "Used fallback because structured competitor parsing failed."
+        ],
+        evidence_points=[
+            search_context[:300] if search_context else "Search data unavailable.",
+            "Market share or funding should be treated as unknown unless verifiable.",
+            "Competitor list requires validation from current sources.",
+        ],
+    )
 
-    obj, err = _parse_json_response(raw_output, CompetitorOutput)
-    if obj:
-        structured_output = structured_to_markdown(obj)
-        competitors_list  = [c.name for c in obj.competitors]
-        print(f"[competitor] structured OK — competitors={competitors_list} gaps={len(obj.market_gaps)}")
-    else:
-        print(f"[competitor] structured extraction failed (using raw): {err}")
-        # Regex fallback: extract bold names from markdown
-        competitors_list = [
-            c.strip() for c in re.findall(r"\*\*(.+?)\*\*", raw_output)
-            if len(c.strip()) > 2
-        ][:5]
+    try:
+        response = await asyncio.wait_for(
+            base_llm.ainvoke(_build_messages(system, human)),
+            timeout=60,
+        )
+
+        raw_output = unwrap_ai_text(_safe_content(response))
+
+        # ("[compprintetitor] raw_output preview:", raw_output[:500])
+
+        obj, err = _parse_json_response(raw_output, CompetitorOutput)
+
+        if not obj:
+            # print(f"[competitor] structured extraction failed, using fallback: {err}")
+            obj = fallback_obj
+        else:
+            print(
+                f"[competitor] structured OK — competitors="
+                f"{[c.name for c in obj.competitors]} gaps={len(obj.market_gaps)}"
+            )
+
+    except Exception as exc:
+        # print(f"[competitor] LLM failed, using fallback: {exc}")
+        obj = fallback_obj
+
+    structured_output = structured_to_markdown(obj)
+    competitors_list = [c.name for c in obj.competitors if c.name != "unknown"]
 
     return {
-        "competitor_output":  structured_output,
-        "competitors_list":   competitors_list,
+        "competitor_output": structured_output,
+        "competitors_list": competitors_list,
+
+        # Optional if your AgentState allows this
+        "competitor_json": obj.model_dump(),
+
         "debate_transcript": [{
-            "agent":     "competitor",
-            "round":     state["round"],
-            "content":   structured_output,
+            "agent": "competitor",
+            "round": state["round"],
+            "content": structured_output,
             "timestamp": time.time(),
         }],
     }
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -864,62 +1412,102 @@ Return ONLY the JSON object described in the system prompt."""
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def critic_node(state: AgentState) -> dict:
-    """
-    Critic agent — evaluates all three agent outputs.
+    # print(f"[critic] round={state['round']} — evaluating outputs")
 
-    Call budget:
-        LLM call 1  → prompt + optional fact-check tool call
-        Tool call   → at most 1
-        LLM call 2  → produces final JSON text
-        Pydantic    → local PydanticOutputParser.parse()
-    Total: 2 LLM calls, ≤1 tool call, 0 extra extraction calls.
-
-    Input from state  : research_output (str), finance_output (str),
-                        competitor_output (str), coral_notes (list[str]),
-                        coral_attempts (list)
-    Output to state   : critiques (list[str]), confidence_score (float),
-                        best_score (float), evals_since_improvement (int),
-                        round (int), debate_transcript entry
-    """
-    print(f"[critic] round={state['round']} — evaluating outputs")
-
-    # All inputs are clean strings — no nested dicts cross node boundaries
-    research   = state.get("research_output",   "[no output]")
-    finance    = state.get("finance_output",    "[no output]")
+    research = state.get("research_output", "[no output]")
+    finance = state.get("finance_output", "[no output]")
     competitor = state.get("competitor_output", "[no output]")
-    past_notes = "\n".join(state.get("coral_notes",    [])[:3])
-    past_att   = "\n".join(str(a) for a in state.get("coral_attempts", [])[:3])
 
-    system = (
-    "You are a strict startup critic and experienced investor.\n"
-    "You may use AT MOST ONE search tool to fact-check claims made by the "
-    "research or competitor agents before scoring them.\n\n"
+    query = state.get("query", "")
+    past_notes = "\n".join(state.get("coral_notes", [])[:3])
+    past_att = "\n".join(str(a) for a in state.get("coral_attempts", [])[:3])
 
-    "CRITICAL RULES:\n"
-    "1. Tool calls are NOT final answers.\n"
-    "2. After tool result, you MUST produce final JSON.\n"
-    "3. Final output MUST be one JSON object only.\n"
-    "4. DO NOT return an array.\n"
-    "5. DO NOT wrap output in {\"type\":\"text\"} or similar.\n"
-    "6. DO NOT include markdown fences.\n"
-    "7. DO NOT include explanations outside JSON.\n\n"
+    rt = _get_runtime()
+    tools = getattr(rt, "tools", []) or []
+    base_llm = (
+        getattr(rt, "gemini", None)
+        or getattr(rt, "grok", None)
+        or getattr(rt, "hf", None)
+    ) if rt else None
 
-    "FIELD RULES:\n"
-    "- research_flaws must contain 3-5 strings.\n"
-    "- finance_flaws must contain at least 1 string. If no flaw, write ['No specific finance flaws identified.'].\n"
-    "- competitor_flaws must contain at least 1 string.\n"
-    "- top_risks must contain exactly 3 strings.\n"
-    "- confidence_score must be a number between 0.0 and 1.0.\n"
-    "- reasoning must be a string.\n\n"
+    fact_check_context = await _run_one_critic_fact_check(
+        tools=tools,
+        query=query,
+        research=research,
+        competitor=competitor,
+    )
 
-    "FINAL ANSWER FORMAT:\n"
-    "{\n"
-    f"{_schema_hint(CriticOutput)}\n"
-    "}\n"
-)
+    fallback_obj = CriticOutput(
+        research_flaws=[
+            "Research claims require stronger source validation before decision-making.",
+            "Market sizing may not be specific enough to the target customer segment.",
+            "Customer adoption assumptions need clearer evidence."
+        ],
+        finance_flaws=[
+            "Finance model depends on simplified assumptions and may not fully include CAC, churn, and scaling costs."
+        ],
+        competitor_flaws=[
+            "Competitor positioning may be incomplete without direct comparison against active alternatives."
+        ],
+        top_risks=[
+            "Market demand may be weaker than assumed.",
+            "Unit economics may worsen after CAC, churn, and operational scaling costs.",
+            "Competitors may respond quickly with better pricing or distribution."
+        ],
+        confidence_score=0.45,
+        reasoning=(
+            "Fallback critic output used because the critic model was unavailable or failed. "
+            "The decision should not proceed without validating research, finance, and competitor assumptions."
+        ),
+    )
 
-    human = f"""You have received three analyses from specialist agents.
-Evaluate them, find flaws, and decide if more research is needed.
+    if base_llm is None:
+        obj = fallback_obj
+    else:
+        system = (
+            "You are a strict startup critic, investment committee reviewer, and risk analyst.\n"
+            "You evaluate research, finance, and competitor outputs for decision quality.\n\n"
+
+            "TOOL RULES:\n"
+            "- You already received fact-check data in the prompt.\n"
+            "- DO NOT call tools yourself.\n\n"
+
+            "EVALUATION STANDARD:\n"
+            "- Be skeptical and specific.\n"
+            "- Penalize unsupported market-size claims.\n"
+            "- Penalize unrealistic finance assumptions.\n"
+            "- Penalize weak competitor validation.\n"
+            "- Reward only evidence-backed, internally consistent analysis.\n\n"
+
+            "CONFIDENCE SCORING:\n"
+            "- 0.00-0.30 = severe flaws, unreliable decision.\n"
+            "- 0.31-0.50 = major gaps remain.\n"
+            "- 0.51-0.70 = usable but needs another refinement round.\n"
+            "- 0.71-0.84 = strong but not final-grade.\n"
+            "- 0.85-1.00 = investment-grade confidence.\n\n"
+
+            "STRICT OUTPUT RULES:\n"
+            "- Return ONLY valid JSON.\n"
+            "- No markdown.\n"
+            "- No explanation outside JSON.\n"
+            "- Never return null for list fields.\n"
+            "- Use [] or ['data unavailable'] for missing list values.\n\n"
+
+            "FIELD REQUIREMENTS:\n"
+            "- research_flaws: 3-5 strings.\n"
+            "- finance_flaws: 1-5 strings.\n"
+            "- competitor_flaws: 1-5 strings.\n"
+            "- top_risks: exactly 3 strings.\n"
+            "- confidence_score: float between 0.0 and 1.0.\n"
+            "- reasoning: 3-5 sentence string.\n\n"
+
+            "Return JSON matching this schema:\n"
+            f"{_schema_hint(CriticOutput)}"
+        )
+
+        human = f"""
+Business Idea:
+{query}
 
 === RESEARCH ANALYSIS ===
 {research}
@@ -930,73 +1518,79 @@ Evaluate them, find flaws, and decide if more research is needed.
 === COMPETITOR ANALYSIS ===
 {competitor}
 
-=== CORAL MEMORY (past notes) ===
+=== FACT-CHECK CONTEXT ===
+{fact_check_context}
+
+=== CORAL MEMORY ===
 {past_notes or "None yet."}
 
-=== CORAL ATTEMPTS (past scores) ===
+=== CORAL ATTEMPTS ===
 {past_att or "None yet."}
 
-Evaluation tasks:
-1. List 3-5 specific flaws or missing information in the research.
-2. Identify unrealistic assumptions in the finance projections.
-3. Challenge the competitor analysis — are the gaps real?
-4. Compare with past failures in CORAL memory.
-5. List the top 3 risks to this business idea.
-6. Give a confidence_score between 0.0 and 1.0:
-   0.0-0.4 = Major issues     0.4-0.7 = Acceptable     0.7-0.85 = Good     0.85-1.0 = Excellent
+Task:
+Evaluate whether the current outputs are strong enough for decision-making.
 
-Return ONLY the JSON object described in the system prompt."""
+You must:
+1. Identify 3-5 research flaws.
+2. Identify finance flaws around CAC, churn, ROI, payback, burn, assumptions, and scalability.
+3. Identify competitor flaws around realness, positioning, market gaps, and differentiation.
+4. List exactly 3 top risks.
+5. Assign confidence_score using the scoring rubric.
+6. Explain reasoning in 3-5 sentences.
 
-    rt    = _get_runtime()
-    tools = getattr(rt, "tools", []) or []
-    base_llm  = getattr(rt, "hf", None) if rt else None
-    llm       = _bind(base_llm, tools)
+Return ONLY valid JSON.
+"""
 
-    print(f"[critic] llm={type(llm).__name__ if llm else 'STUB'} tools={[t.name for t in tools]}")
+        # print(
+        #     f"[critic] llm={type(base_llm).__name__} "
+        #     "tools=MANUAL_FACT_CHECK_ONLY"
+        # )
 
-    raw_output = await _llm_invoke_with_tools(llm, tools, _build_messages(system, human))
-    raw_output = unwrap_ai_text(raw_output)
+        try:
+            response = await asyncio.wait_for(
+                base_llm.ainvoke(_build_messages(system, human)),
+                timeout=60,
+            )
 
-    # ── Local Pydantic parse — zero extra LLM calls ───────────────────────────
-    new_confidence    = 0.5   # safe default
-    structured_output = raw_output
+            raw_output = unwrap_ai_text(_safe_content(response))
+            # print("[critic] raw_output preview:", raw_output[:500])
 
-    obj, err = _parse_json_response(raw_output, CriticOutput)
-    if obj:
-        new_confidence    = max(0.0, min(1.0, obj.confidence_score))
-        structured_output = structured_to_markdown(obj)
-        print(f"[critic] structured OK — confidence={new_confidence:.4f}")
-    else:
-        print(f"[critic] structured extraction failed — falling back to regex: {err}")
-        raw_text = str(raw_output)
-        match = re.search(
-            r"confidence[_\s]*score[:\s]+([0-9]*\.?[0-9]+)",
-            raw_text, re.IGNORECASE,
-        )
-        if match:
-            new_confidence = max(0.0, min(1.0, float(match.group(1))))
+            parsed_obj, err = _parse_json_response(raw_output, CriticOutput)
 
-    # ── Improvement tracking ──────────────────────────────────────────────────
-    prev_best   = state.get("best_score", 0.0)
-    improved    = new_confidence > prev_best
+            if parsed_obj:
+                obj = parsed_obj
+            else:
+                # print(f"[critic] structured extraction failed, using fallback: {err}")
+                obj = fallback_obj
+
+        except Exception as exc:
+            # print(f"[critic] LLM failed, using fallback: {exc}")
+            obj = fallback_obj
+
+    new_confidence = max(0.0, min(1.0, obj.confidence_score))
+    structured_output = structured_to_markdown(obj)
+
+    prev_best = state.get("best_score", 0.0)
+    improved = new_confidence > prev_best
     evals_since = 0 if improved else state.get("evals_since_improvement", 0) + 1
-    best_score  = max(prev_best, new_confidence)
+    best_score = max(prev_best, new_confidence)
+
+    # print(f"[critic] structured OK — confidence={new_confidence:.4f}")
 
     return {
-        "critiques":               [structured_output],   # clean string inside list
-        "confidence_score":        round(new_confidence, 4),
-        "best_score":              round(best_score, 4),
+        "critiques": [structured_output],
+        "confidence_score": round(new_confidence, 4),
+        "best_score": round(best_score, 4),
         "evals_since_improvement": evals_since,
-        "round":                   state["round"] + 1,
+        "round": state["round"] + 1,
+        "critic_json": obj.model_dump(),
         "debate_transcript": [{
-            "agent":     "critic",
-            "round":     state["round"],
-            "content":   structured_output,
+            "agent": "critic",
+            "round": state["round"],
+            "content": structured_output,
             "timestamp": time.time(),
         }],
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 6 — Heartbeat (CORAL)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1060,10 +1654,10 @@ async def heartbeat_node(state: AgentState) -> dict:
     else:
         action = "refine"
 
-    print(
-        f"[heartbeat] round={round_num} confidence={confidence:.2f} "
-        f"stagnation={stagnation} action={action} prompts={len(prompts)}"
-    )
+    # print(
+    #     f"[heartbeat] round={round_num} confidence={confidence:.2f} "
+    #     f"stagnation={stagnation} action={action} prompts={len(prompts)}"
+    # )
 
     return {
         "heartbeat_action":  action,
@@ -1086,182 +1680,274 @@ async def heartbeat_node(state: AgentState) -> dict:
 
 async def ceo_node(state: AgentState) -> dict:
     """
-    Final decision-maker agent.
-
-    Call budget:
-        LLM call 1  → prompt + optional final-validation tool call
-        Tool call   → at most 1
-        LLM call 2  → produces final JSON text
-        Pydantic    → local PydanticOutputParser.parse()
-    Total: 2 LLM calls, ≤1 tool call, 0 extra extraction calls.
-
-    Input from state  : research_output (str), finance_output (str),
-                        competitor_output (str), critiques (list[str]),
-                        confidence_score (float), round (int), query (str)
-    Output to state   : final_decision (str), reasoning_summary (str),
-                        debate_transcript entry
+    Production CEO node.
+    Manual validation search + plain LLM call + deterministic fallback.
     """
+
     from coral.memory import CoralMemory
     from coral.grader import Grader
 
     session_id = state["session_id"]
-    confidence = state["confidence_score"]
-    print(f"[ceo] producing final decision — confidence={confidence:.2f}")
+    confidence = float(state.get("confidence_score", 0.5))
 
-    memory  = CoralMemory(session_id=session_id)
-    grader  = Grader()
+    # (f"[ceo] producing finprintal decision — confidence={confidence:.2f}")
 
-    leaderboard = memory.get_leaderboard(top_k=3)
-    leaderboard_ctx = "\n".join(
-        f"  #{i+1} score={a['score']:.2f}: {a['output'][:120]}..."
-        for i, a in enumerate(leaderboard)
-    ) if leaderboard else "No prior decisions."
+    research = state.get("research_output", "[unavailable]")
+    finance = state.get("finance_output", "[unavailable]")
+    competitor = state.get("competitor_output", "[unavailable]")
+    critiques = state.get("critiques", [])
+    query = state.get("query", "")
 
-    # All inputs from state are already clean strings
-    research         = state.get("research_output",   "[unavailable]")
-    finance          = state.get("finance_output",    "[unavailable]")
-    competitor       = state.get("competitor_output", "[unavailable]")
-    critiques        = state.get("critiques", [])
-    critique_summary = critiques[-1][:600] if critiques else "No critiques."
+    critique_summary = critiques[-1][:1000] if critiques else "No critiques."
 
-    system = (
-    "You are the CEO of a venture-backed AI company.\n"
-    "You may call AT MOST ONE search tool to do final validation of key claims "
-    "before making your investment recommendation.\n\n"
+    memory = CoralMemory(session_id=session_id)
+    grader = Grader()
 
-    "CRITICAL RULES:\n"
-    "1. Tool calls are NOT final answers.\n"
-    "2. After tool result, you MUST produce final JSON.\n"
-    "3. Final output MUST be one JSON object only.\n"
-    "4. DO NOT return an array.\n"
-    "5. DO NOT wrap output in {\"type\":\"text\"} or similar.\n"
-    "6. DO NOT include markdown fences.\n"
-    "7. DO NOT include explanations outside JSON.\n\n"
+    try:
+        leaderboard = memory.get_leaderboard(top_k=3)
+        leaderboard_ctx = "\n".join(
+            f"#{i + 1} score={a['score']:.2f}: {a['output'][:120]}..."
+            for i, a in enumerate(leaderboard)
+        ) if leaderboard else "No prior decisions."
+    except Exception as exc:
+        # (f"[ceo] leaderboard read failed: {exc}")
+        leaderboard_ctx = "Leaderboard unavailable."
 
-    "FIELD RULES:\n"
-    "- recommendation must be one of: PROCEED, DO NOT PROCEED, CONDITIONAL PROCEED.\n"
-    "- confidence_percent must be a number between 0 and 100.\n"
-    "- reasoning must be 3-5 sentences.\n"
-    "- key_success_conditions must contain exactly 3 strings.\n"
-    "- risk_mitigations must contain exactly 3 strings.\n"
-    "- critic_concerns_addressed must contain at least 1 string.\n\n"
+    rt = _get_runtime()
+    tools = getattr(rt, "tools", []) or []
 
-    "FINAL ANSWER FORMAT:\n"
-    "{\n"
-    f"{_schema_hint(CEOOutput)}\n"
-    "}\n"
-)
+    # Prefer stronger model for final decision, but must be plain model.
+    base_llm = (
+        getattr(rt, "grok", None)
+        or getattr(rt, "gemini", None)
+        or getattr(rt, "hf", None)
+    ) if rt else None
 
-    human = f"""=== RESEARCH ===
-{research[:800]}
+    validation_context = await _run_one_ceo_validation_search(tools, query)
 
-=== FINANCE ===
-{finance[:800]}
+    # Deterministic fallback recommendation from critic confidence
+    if confidence >= 0.85:
+        fallback_recommendation = "PROCEED"
+        fallback_confidence = round(confidence * 100, 1)
+    elif confidence >= 0.65:
+        fallback_recommendation = "CONDITIONAL PROCEED"
+        fallback_confidence = round(confidence * 100, 1)
+    else:
+        fallback_recommendation = "DO NOT PROCEED"
+        fallback_confidence = round(confidence * 100, 1)
+
+    fallback_obj = CEOOutput(
+        recommendation=fallback_recommendation,
+        confidence_percent=fallback_confidence,
+        reasoning=(
+            "The final decision is based on the critic confidence score and the combined research, finance, and competitor outputs. "
+            "The opportunity requires stronger validation before major investment because several assumptions may still be unproven. "
+            "Execution should proceed only if the team can validate demand, unit economics, and differentiation with real customers."
+        ),
+        key_success_conditions=[
+            "Validate customer demand through paid pilots or signed letters of intent.",
+            "Prove unit economics with controlled CAC, churn, gross margin, and payback targets.",
+            "Demonstrate defensible differentiation against active competitors in the target segment.",
+        ],
+        risk_mitigations=[
+            "Use staged rollout with milestone-based funding instead of full upfront expansion.",
+            "Track CAC, retention, contribution margin, and payback monthly before scaling.",
+            "Limit initial launch scope to one niche customer segment or geography.",
+        ],
+        critic_concerns_addressed=[
+            "Addressed critic concerns by conditioning the decision on validation of research, finance, and competitor assumptions."
+        ],
+    )
+
+    if base_llm is None:
+        obj = fallback_obj
+    else:
+        system = (
+            "You are the CEO and investment committee chair of a venture-backed AI company.\n"
+            "You make the final go/no-go decision using research, finance, competitor analysis, critic feedback, and validation context.\n\n"
+
+            "TOOL RULES:\n"
+            "- You already received final validation search context in the prompt.\n"
+            "- DO NOT call tools yourself.\n\n"
+
+            "DECISION STANDARD:\n"
+            "- Be commercially realistic and conservative.\n"
+            "- Do not recommend PROCEED unless evidence, finance, and differentiation are strong.\n"
+            "- If critic confidence is below 0.65, prefer DO NOT PROCEED or CONDITIONAL PROCEED.\n"
+            "- If finance shows negative ROI/no payback, avoid PROCEED unless there is a strong staged-validation plan.\n"
+            "- If competitor differentiation is weak, avoid PROCEED.\n\n"
+
+            "RECOMMENDATION RULES:\n"
+            "- recommendation must be exactly one of: PROCEED, DO NOT PROCEED, CONDITIONAL PROCEED.\n"
+            "- confidence_percent must be between 0 and 100.\n"
+            "- reasoning must be 3-5 sentences.\n"
+            "- key_success_conditions must contain exactly 3 strings.\n"
+            "- risk_mitigations must contain exactly 3 strings.\n"
+            "- critic_concerns_addressed must contain 1-5 strings.\n\n"
+
+            "NULL SAFETY RULE:\n"
+            "- Never return null for any field.\n"
+            "- Use [] or ['data unavailable'] for missing list fields.\n"
+            "- Use 'data unavailable' for missing string fields.\n\n"
+
+            "STRICT OUTPUT RULES:\n"
+            "- Return ONLY valid JSON.\n"
+            "- No markdown.\n"
+            "- No explanation outside JSON.\n"
+            "- Do not wrap JSON in an array.\n\n"
+
+            "Return JSON matching this schema:\n"
+            f"{_schema_hint(CEOOutput)}"
+        )
+
+        human = f"""
+Business Idea:
+{query}
+
+=== RESEARCH ANALYSIS ===
+{research[:1500]}
+
+=== FINANCE ANALYSIS ===
+{finance[:1500]}
 
 === COMPETITOR ANALYSIS ===
-{competitor[:800]}
+{competitor[:1500]}
 
 === CRITIC SUMMARY ===
 {critique_summary}
 
-=== TOP PAST DECISIONS (CORAL leaderboard) ===
+=== FINAL VALIDATION CONTEXT ===
+{validation_context}
+
+=== TOP PAST DECISIONS FROM CORAL ===
 {leaderboard_ctx}
 
 === CURRENT STATE ===
-- Debate rounds completed: {state["round"]}
-- Final confidence score: {confidence:.2f}
-- Query: {state["query"]}
+- Debate rounds completed: {state.get("round", 0)}
+- Critic confidence score: {confidence:.2f}
 
-Your task:
-1. Synthesise all three analyses.
-2. Address the critic's top concerns.
-3. Make a clear PROCEED / DO NOT PROCEED / CONDITIONAL PROCEED recommendation.
-4. State your confidence as a percentage.
-5. List 3 key success conditions.
-6. List 3 risk mitigations.
+Task:
+Make the final investment/startup decision.
 
-Return ONLY the JSON object described in the system prompt."""
+You must:
+1. Synthesize research, finance, competitor analysis, and critic feedback.
+2. Address critic concerns directly.
+3. Choose PROCEED, DO NOT PROCEED, or CONDITIONAL PROCEED.
+4. Set confidence_percent based on evidence quality and critic confidence.
+5. Provide exactly 3 key success conditions.
+6. Provide exactly 3 risk mitigations.
 
-    rt    = _get_runtime()
-    tools = getattr(rt, "tools", []) or []
-    base_llm = (
-        getattr(rt, "hf", None) or getattr(rt, "grok", None)
-    ) if rt else None
-    llm = _bind(base_llm, tools)
+Return ONLY valid JSON.
+"""
 
-    print(f"[ceo] llm={type(llm).__name__ if llm else 'STUB'} tools={[t.name for t in tools]}")
+        # print(
+        #     f"[ceo] llm={type(base_llm).__name__ if base_llm else 'STUB'} "
+        #     "tools=MANUAL_VALIDATION_ONLY"
+        # )
 
-    raw_output = await _llm_invoke_with_tools(llm, tools, _build_messages(system, human))
-    raw_output = unwrap_ai_text(raw_output)
+        try:
+            response = await asyncio.wait_for(
+                base_llm.ainvoke(_build_messages(system, human)),
+                timeout=60,
+            )
 
-    # ── Local Pydantic parse — zero extra LLM calls ───────────────────────────
-    structured_output = raw_output
-    obj, err = _parse_json_response(raw_output, CEOOutput)
-    if obj:
-        structured_output = structured_to_markdown(obj)
-        print(f"[ceo] structured OK — recommendation={obj.recommendation} confidence={obj.confidence_percent:.1f}%")
-    else:
-        print(f"[ceo] structured extraction failed (using raw): {err}")
+            raw_output = unwrap_ai_text(_safe_content(response))
+            # print("[ceo] raw_output preview:", raw_output[:500])
 
-    # ── Grade + CORAL write ───────────────────────────────────────────────────
-    grade = grader.grade(
-        decision=structured_output,
-        critiques=critiques,
-        research=research,
-    )
+            parsed_obj, err = _parse_json_response(raw_output, CEOOutput)
+
+            if parsed_obj:
+                obj = parsed_obj
+            else:
+                # print(f"[ceo] structured extraction failed, using fallback: {err}")
+                obj = fallback_obj
+
+        except Exception as exc:
+            # print(f"[ceo] LLM failed, using fallback: {exc}")
+            obj = fallback_obj
+
+    structured_output = structured_to_markdown(obj)
+
+    try:
+        grade = grader.grade(
+            decision=structured_output,
+            critiques=critiques,
+            research=research,
+        )
+    except Exception as exc:
+        # print(f"[ceo] grading failed: {exc}")
+
+        class _FallbackGrade:
+            score = confidence
+            feedback = "Fallback grade used because grader failed."
+            breakdown = {}
+
+        grade = _FallbackGrade()
 
     prev_best = state.get("best_score", 0.0)
-    memory.write_attempt(
-        agent_id="ceo",
-        output=structured_output[:800],
-        score=grade.score,
-        feedback=grade.feedback,
-        status="improved" if grade.score > prev_best else "baseline",
-    )
 
-    memory.write_note(
-        agent_id="ceo",
-        title=f"Decision round {state['round']} — grader {grade.score:.2f}",
-        content=(
-            f"Query: {state['query']}\n\n"
-            f"Decision:\n{structured_output}\n\n"
-            f"Grade: {grade.feedback}\n"
-            f"Breakdown: {grade.breakdown}"
-        ),
-        subfolder="agent-ceo",
-    )
+    try:
+        memory.write_attempt(
+            agent_id="ceo",
+            output=structured_output[:800],
+            score=grade.score,
+            feedback=grade.feedback,
+            status="improved" if grade.score > prev_best else "baseline",
+        )
+    except Exception as exc:
+        print(f"[ceo] memory write_attempt failed: {exc}")
+
+    try:
+        memory.write_note(
+            agent_id="ceo",
+            title=f"Decision round {state.get('round', 0)} — grader {grade.score:.2f}",
+            content=(
+                f"Query: {query}\n\n"
+                f"Decision:\n{structured_output}\n\n"
+                f"Grade: {grade.feedback}\n"
+                f"Breakdown: {grade.breakdown}"
+            ),
+            subfolder="agent-ceo",
+        )
+    except Exception as exc:
+        print(f"[ceo] memory write_note failed: {exc}")
 
     try:
         from memory.vector_store import add_text
         add_text(
-            f"Decision for: {state['query']}\n\n{structured_output}",
+            f"Decision for: {query}\n\n{structured_output}",
             metadata={
                 "session_id": session_id,
-                "round":      state["round"],
+                "round": state.get("round", 0),
                 "confidence": confidence,
-                "score":      grade.score,
+                "score": grade.score,
+                "recommendation": obj.recommendation,
             },
         )
     except Exception as exc:
-        print(f"[ceo] vector store write failed (non-fatal): {exc}")
+        print(f"[ceo] vector store write failed: {exc}")
+
+    # print(
+    #     f"[ceo] structured OK — recommendation={obj.recommendation} "
+    #     f"confidence={obj.confidence_percent:.1f}%"
+    # )
 
     return {
-        "final_decision": structured_output,      # clean string
+        "final_decision": structured_output,
+        "ceo_json": obj.model_dump(),
         "reasoning_summary": (
-            f"Completed {state['round']} debate rounds. "
+            f"Completed {state.get('round', 0)} debate rounds. "
             f"Agent confidence: {confidence:.2f}. "
             f"Grader score: {grade.score:.2f}. "
-            f"Verdict: {grade.feedback}"
+            f"Recommendation: {obj.recommendation}."
         ),
         "debate_transcript": [{
-            "agent":     "ceo",
-            "round":     state["round"],
-            "content":   structured_output,
+            "agent": "ceo",
+            "round": state.get("round", 0),
+            "content": structured_output,
             "timestamp": time.time(),
         }],
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 8 — Meta-Eval
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1281,10 +1967,10 @@ async def meta_eval_node(state: AgentState) -> dict:
     rounds  = state.get("round")            or 0
     session = state.get("session_id")       or "unknown"
  
-    print(
-        f"[meta_eval] session={session} rounds={rounds} "
-        f"confidence={score:.2f} decision_length={len(final)}"
-    )
+    # print(
+    #     f"[meta_eval] session={session} rounds={rounds} "
+    #     f"confidence={score:.2f} decision_length={len(final)}"
+    # )
  
     # Return safe defaults so downstream reducers never get None
     return {

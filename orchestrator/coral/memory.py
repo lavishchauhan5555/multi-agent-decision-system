@@ -24,6 +24,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+import shutil
 
 
 # ── Root path — relative to orchestrator/ working directory ─────────────────
@@ -38,9 +39,13 @@ class CoralMemory:
     agents never collide.
     """
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, clean_old: bool = False):
         self.session_id = session_id
-        self._ensure_dirs()
+
+        if clean_old:
+            self.clear_old_memory_keep_latest()
+        else:
+            self._ensure_dirs()
 
     # ── Directory bootstrap ──────────────────────────────────────────────────
     def _ensure_dirs(self):
@@ -86,12 +91,116 @@ class CoralMemory:
         }
 
         path = CORAL_ROOT / "attempts" / f"{commit_hash}.json"
-        path.write_text(json.dumps(record, indent=2, ensure_ascii=False))
+        path.write_text(
+            json.dumps(record, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+           
 
         # Also increment global eval counter
         self.increment_eval_count()
 
         return commit_hash
+    
+
+
+   
+
+    def clear_old_memory_keep_latest(self):
+        """
+        Keep latest previous run memory.
+        Delete older attempts, notes, skills, heartbeat.
+        Current new run will then add fresh memory.
+        """
+
+        self._ensure_dirs()
+
+        attempts_dir = CORAL_ROOT / "attempts"
+
+        # Find latest previous session_id from attempts
+        latest_session_id = None
+        latest_timestamp = ""
+
+        for f in attempts_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+                ts = data.get("timestamp", "")
+                if ts > latest_timestamp:
+                    latest_timestamp = ts
+                    latest_session_id = data.get("session_id")
+            except Exception:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+        # If no previous memory exists, nothing to clean
+        if not latest_session_id:
+            return
+
+        # Delete attempts not from latest session
+        for f in attempts_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+                if data.get("session_id") != latest_session_id:
+                    f.unlink()
+            except Exception:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+        # Delete notes not from latest session
+        notes_dir = CORAL_ROOT / "notes"
+        if notes_dir.exists():
+            for f in notes_dir.rglob("*.md"):
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                    if f"session_id: {latest_session_id}" not in text:
+                        f.unlink()
+                except Exception:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+
+        # Delete all skills except latest session skills
+        skills_dir = CORAL_ROOT / "skills"
+        if skills_dir.exists():
+            for skill_folder in skills_dir.iterdir():
+                try:
+                    skill_md = skill_folder / "SKILL.md"
+                    if not skill_md.exists():
+                        shutil.rmtree(skill_folder)
+                        continue
+
+                    text = skill_md.read_text(encoding="utf-8", errors="replace")
+                    if f"session_id: {latest_session_id}" not in text:
+                        shutil.rmtree(skill_folder)
+                except Exception:
+                    try:
+                        shutil.rmtree(skill_folder)
+                    except OSError:
+                        pass
+
+        # Heartbeat usually has no session_id, so safest is delete it
+        heartbeat_dir = CORAL_ROOT / "heartbeat"
+        if heartbeat_dir.exists():
+            shutil.rmtree(heartbeat_dir)
+            heartbeat_dir.mkdir(parents=True, exist_ok=True)
+
+        self._ensure_dirs()
+    
+    
+
+
+
+
+
+
+
+
+
 
     def get_leaderboard(self, top_k: int = 10) -> list[dict]:
         """
@@ -99,13 +208,19 @@ class CoralMemory:
         Called by CEO agent before making final decision.
         """
         attempts = []
+
         for f in (CORAL_ROOT / "attempts").glob("*.json"):
             try:
-                attempts.append(json.loads(f.read_text()))
-            except (json.JSONDecodeError, OSError):
-                pass
+                text = f.read_text(encoding="utf-8", errors="replace")
+                attempts.append(json.loads(text))
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+                print(f"[coral] skipping bad attempt file {f}: {exc}")
 
-        return sorted(attempts, key=lambda x: x.get("score", 0), reverse=True)[:top_k]
+        return sorted(
+            attempts,
+            key=lambda x: x.get("score", 0),
+            reverse=True
+        )[:top_k]
 
     def get_attempt(self, commit_hash: str) -> Optional[dict]:
         """Fetch a single attempt by hash. Used by Critic for comparison."""

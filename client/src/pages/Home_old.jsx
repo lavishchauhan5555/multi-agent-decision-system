@@ -1,8 +1,7 @@
 // src/pages/Home.jsx
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import useRunStore from '../store/useRunStore'
-import { useAuth } from '../context/AuthContext'
 
 const EXAMPLES = [
   'AI-powered resume builder for technical professionals',
@@ -14,7 +13,6 @@ export default function Home() {
   const navigate   = useNavigate()
   const launch     = useRunStore(s => s.launch)
   const setQuery   = useRunStore(s => s.setQuery)
-  const { user, logout } = useAuth()
 
   const [query,     setLocalQuery]  = useState('')
   const [maxRounds, setMaxRounds]   = useState(3)
@@ -40,60 +38,15 @@ export default function Home() {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit()
   }
 
-  const handleLogout = async () => {
-    await logout()
-    navigate('/login')
-  }
-
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
 
       {/* Top bar */}
-      <div className="topbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+      <div className="topbar">
         <span className="topbar-logo">VANTAGE</span>
         <span className="topbar-sep">/</span>
         <span className="topbar-sub">multi-agent decision system</span>
         <div className="topbar-dot" />
-
-        {/* Nav links */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          {/* User badge */}
-          {user && (
-            <span style={{
-              fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-3)',
-              padding: '4px 10px', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-sm)', letterSpacing: '0.05em',
-            }}>
-              ◈ {user.name || user.email}
-            </span>
-          )}
-
-          <Link to="/history" style={{ textDecoration: 'none' }}>
-            <button className="btn" style={{ padding: '6px 14px', fontSize: 11 }}>
-              ⟡ history
-            </button>
-          </Link>
-
-          <Link to="/knowledge" style={{ textDecoration: 'none' }}>
-            <button className="btn" style={{ padding: '6px 14px', fontSize: 11 }}>
-              ✦ knowledge
-            </button>
-          </Link>
-
-          <Link to="/server-health" style={{ textDecoration: 'none' }}>
-            <button className="btn" style={{ padding: '6px 14px', fontSize: 11 }}>
-              ♥ health
-            </button>
-          </Link>
-
-          <button
-            className="btn"
-            style={{ padding: '6px 14px', fontSize: 11, color: 'var(--red)', borderColor: 'var(--red)' }}
-            onClick={handleLogout}
-          >
-            ↪ logout
-          </button>
-        </div>
       </div>
 
       {/* Hero */}
@@ -130,42 +83,6 @@ export default function Home() {
           </h1>
         </div>
 
-        {/* Quick-nav cards */}
-        <div style={{
-          width: '100%', maxWidth: 680,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 8,
-          marginBottom: 20,
-        }}>
-          {[
-            { to: '/history',   icon: '⟡', label: 'History',   desc: 'Past query runs' },
-            { to: '/knowledge', icon: '✦', label: 'Knowledge',  desc: 'Notes · Skills · Leaderboard' },
-            { to: '/server-health',    icon: '♥', label: 'Server Health', desc: 'API · DB · agents' },
-          ].map(({ to, icon, label, desc }) => (
-            <Link key={to} to={to} style={{ textDecoration: 'none' }}>
-              <div
-                className="panel"
-                style={{ cursor: 'pointer', transition: 'all 0.15s' }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'var(--border-lit)'
-                  e.currentTarget.style.background   = 'var(--bg-3)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = ''
-                  e.currentTarget.style.background   = ''
-                }}
-              >
-                <div className="panel-body" style={{ padding: '12px 14px' }}>
-                  <div style={{ fontSize: 16, marginBottom: 4, color: 'var(--amber)' }}>{icon}</div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-1)', fontFamily: 'var(--mono)', letterSpacing: '0.05em' }}>{label}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{desc}</div>
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
-
         {/* Input card */}
         <div style={{ width: '100%', maxWidth: 680 }}>
           <div className="panel">
@@ -188,20 +105,27 @@ export default function Home() {
               />
 
               {/* Config row */}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span className="data-dim" style={{ fontSize: 10 }}>MAX ROUNDS</span>
                   <select
                     value={maxRounds}
                     onChange={e => setMaxRounds(Number(e.target.value))}
                     style={{
-                      background: 'var(--bg-2)', border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)', color: 'var(--text-0)',
-                      fontFamily: 'var(--mono)', fontSize: 12, padding: '6px 10px',
-                      cursor: 'pointer', outline: 'none',
+                      background: 'var(--bg-2)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-0)',
+                      fontFamily: 'var(--mono)',
+                      fontSize: 12,
+                      padding: '6px 10px',
+                      cursor: 'pointer',
+                      outline: 'none',
                     }}
                   >
-                    {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
+                    {[1, 2, 3, 4, 5].map(n => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
                   </select>
                 </label>
 
@@ -211,10 +135,15 @@ export default function Home() {
                     value={threshold}
                     onChange={e => setThreshold(Number(e.target.value))}
                     style={{
-                      background: 'var(--bg-2)', border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)', color: 'var(--text-0)',
-                      fontFamily: 'var(--mono)', fontSize: 12, padding: '6px 10px',
-                      cursor: 'pointer', outline: 'none',
+                      background: 'var(--bg-2)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-0)',
+                      fontFamily: 'var(--mono)',
+                      fontSize: 12,
+                      padding: '6px 10px',
+                      cursor: 'pointer',
+                      outline: 'none',
                     }}
                   >
                     {[0.70, 0.75, 0.80, 0.85, 0.90].map(t => (
@@ -235,9 +164,12 @@ export default function Home() {
 
               {error && (
                 <div style={{
-                  padding: '8px 12px', background: 'var(--red-dim)',
-                  border: '1px solid var(--red)', borderRadius: 'var(--radius-sm)',
-                  fontSize: 11, color: 'var(--red)',
+                  padding: '8px 12px',
+                  background: 'var(--red-dim)',
+                  border: '1px solid var(--red)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 11,
+                  color: 'var(--red)',
                 }}>
                   ✕ {error}
                 </div>
@@ -247,20 +179,34 @@ export default function Home() {
 
           {/* Examples */}
           <div style={{ marginTop: 20 }}>
-            <div className="data-dim" style={{ fontSize: 10, marginBottom: 8 }}>EXAMPLE QUERIES</div>
+            <div className="data-dim" style={{ fontSize: 10, marginBottom: 8 }}>
+              EXAMPLE QUERIES
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {EXAMPLES.map(ex => (
                 <button
                   key={ex}
                   onClick={() => setLocalQuery(ex)}
                   style={{
-                    background: 'transparent', border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-sm)', color: 'var(--text-2)',
-                    fontFamily: 'var(--mono)', fontSize: 11, padding: '7px 12px',
-                    textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s',
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-2)',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 11,
+                    padding: '7px 12px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
                   }}
-                  onMouseEnter={e => { e.target.style.borderColor = 'var(--border-lit)'; e.target.style.color = 'var(--text-1)' }}
-                  onMouseLeave={e => { e.target.style.borderColor = 'var(--border)';     e.target.style.color = 'var(--text-2)' }}
+                  onMouseEnter={e => {
+                    e.target.style.borderColor = 'var(--border-lit)'
+                    e.target.style.color = 'var(--text-1)'
+                  }}
+                  onMouseLeave={e => {
+                    e.target.style.borderColor = 'var(--border)'
+                    e.target.style.color = 'var(--text-2)'
+                  }}
                 >
                   ↳ {ex}
                 </button>

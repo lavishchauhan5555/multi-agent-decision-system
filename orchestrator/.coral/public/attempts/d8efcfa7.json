@@ -1,0 +1,11 @@
+{
+  "commit_hash": "d8efcfa7",
+  "agent_id": "ceo",
+  "session_id": "04c422be-4784-471a-b79c-1ed9d1256af0",
+  "output": "**Recommendation:** DO NOT PROCEED\n**Confidence Percent:** 30.0\n**Reasoning:** The business idea for an AI-powered resume builder has several flaws, including unsupported market-size claims, lack of specific data on AI-powered resume builders' adoption rates and market share, and insufficient discussion on potential barriers to AI adoption in resume building. Additionally, the finance analysis shows a negative ROI and inability to recover the initial investment. The competitor analysis lacks real-world data on market performance, and the differentiation strategy relies on vague promises of 'advanced AI-powered features' without concrete examples. The critic confidence score is 0.51, which is below the threshold of 0.65, further supporting the decision to not proceed.\n**Key Success Conditio",
+  "score": 0.8,
+  "feedback": "Score: 80% | Missing: confidence_stated | Strong decision — ready for output.",
+  "status": "improved",
+  "parent_hash": null,
+  "timestamp": "2026-04-28T15:12:36.736388+00:00"
+}

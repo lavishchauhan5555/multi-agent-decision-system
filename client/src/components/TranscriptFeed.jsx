@@ -1,7 +1,9 @@
 // src/components/TranscriptFeed.jsx
 import { useEffect, useRef, useState, useCallback } from 'react'
 
+// ── All node name variants the pipeline can emit ──────────────────────────────
 const NODE_COLORS = {
+  // _node suffix (FastAPI)
   cache_check_node: 'var(--blue)',
   fanout_node:      'var(--text-3)',
   research_node:    'var(--amber)',
@@ -11,6 +13,7 @@ const NODE_COLORS = {
   heartbeat_node:   '#60c0d0',
   ceo_node:         'var(--green)',
   meta_eval_node:   'var(--text-2)',
+  // short names (Node.js pipeline role / agentId)
   cache_check:      'var(--blue)',
   fanout:           'var(--text-3)',
   research:         'var(--amber)',
@@ -20,6 +23,8 @@ const NODE_COLORS = {
   heartbeat:        '#60c0d0',
   ceo:              'var(--green)',
   meta_eval:        'var(--text-2)',
+  // system / terminal
+  system:           'var(--text-3)',
   __done__:         'var(--green)',
   __error__:        'var(--red)',
 }
@@ -43,8 +48,22 @@ const NODE_SHORT = {
   heartbeat:        'BEAT',
   ceo:              'CEO',
   meta_eval:        'META',
+  // system / terminal
+  system:           'SYS',
   __done__:         'DONE',
   __error__:        'ERR',
+}
+
+// ── Safely format a timestamp that may be ms OR seconds ──────────────────────
+function formatTs(ts) {
+  if (!ts) return ''
+  // If ts looks like a Unix-seconds value (< 2e10) multiply; otherwise it's ms
+  const ms = ts < 2e10 ? ts * 1000 : ts
+  try {
+    return new Date(ms).toLocaleTimeString('en-US', { hour12: false })
+  } catch {
+    return ''
+  }
 }
 
 // ── Copy button ───────────────────────────────────────────────────────────────
@@ -80,17 +99,16 @@ function CopyButton({ text }) {
 function EventRow({ ev }) {
   const [expanded, setExpanded] = useState(false)
 
-  const color      = NODE_COLORS[ev.node] ?? 'var(--text-2)'
-  const short      = NODE_SHORT[ev.node]  ?? ev.node.slice(0, 5).toUpperCase()
-  const isTerminal = ['__done__', '__error__'].includes(ev.node)
+  const node       = ev.node ?? 'system'
+  const color      = NODE_COLORS[node] ?? 'var(--text-2)'
+  const short      = NODE_SHORT[node]  ?? node.slice(0, 5).toUpperCase()
+  const isTerminal = ['__done__', '__error__'].includes(node)
   const raw        = ev.content ?? ''
   const hasMore    = raw.length > 80 && !isTerminal
 
-  const tsStr = ev.timestamp
-    ? new Date(ev.timestamp * 1000).toLocaleTimeString('en-US', { hour12: false })
-    : ''
+  const tsStr  = formatTs(ev.timestamp)
 
-  // Show only first line, truncated, as preview
+  // Preview: first non-empty line, truncated
   const firstLine = raw.split('\n').find(l => l.trim()) ?? ''
   const preview   = firstLine.slice(0, 80) + (raw.length > 80 ? '…' : '')
 
@@ -102,13 +120,13 @@ function EventRow({ ev }) {
     <div
       onClick={toggle}
       style={{
-        borderLeft:  `2px solid ${expanded ? color : 'transparent'}`,
-        background:  expanded ? 'rgba(255,255,255,0.025)' : 'transparent',
-        cursor:      hasMore ? 'pointer' : 'default',
-        transition:  'background 0.15s, border-color 0.15s',
+        borderLeft: `2px solid ${expanded ? color : 'transparent'}`,
+        background: expanded ? 'rgba(255,255,255,0.025)' : 'transparent',
+        cursor:     hasMore ? 'pointer' : 'default',
+        transition: 'background 0.15s, border-color 0.15s',
       }}
     >
-      {/* ── Header row (always visible) ────────────────────────────────── */}
+      {/* ── Header row ─────────────────────────────────────────────────── */}
       <div style={{
         display:             'grid',
         gridTemplateColumns: '58px 46px 12px 1fr',
@@ -116,17 +134,14 @@ function EventRow({ ev }) {
         padding:             '4px 12px',
         alignItems:          'center',
       }}>
-        {/* Timestamp */}
         <span style={{ color: 'var(--text-3)', fontSize: 10, userSelect: 'none' }}>
           {tsStr}
         </span>
 
-        {/* Node badge */}
         <span style={{ color, fontWeight: 700, fontSize: 10, letterSpacing: '0.08em' }}>
           {short}
         </span>
 
-        {/* Chevron — only visible when expandable */}
         <span style={{
           color:      'var(--text-3)',
           fontSize:   8,
@@ -139,7 +154,6 @@ function EventRow({ ev }) {
           ▶
         </span>
 
-        {/* Preview text */}
         <span style={{
           color:        isTerminal ? color : 'var(--text-1)',
           fontSize:     11,
@@ -148,8 +162,8 @@ function EventRow({ ev }) {
           overflow:     'hidden',
           textOverflow: 'ellipsis',
         }}>
-          {ev.node === '__done__'  && '■ run complete'}
-          {ev.node === '__error__' && `✕ ${raw || 'unknown error'}`}
+          {node === '__done__'  && '■ run complete'}
+          {node === '__error__' && `✕ ${raw || 'unknown error'}`}
           {!isTerminal && (raw
             ? preview
             : <span style={{ color: 'var(--text-3)' }}>—</span>
@@ -160,7 +174,7 @@ function EventRow({ ev }) {
       {/* ── Expanded full content ───────────────────────────────────────── */}
       {expanded && !isTerminal && (
         <div
-          onClick={e => e.stopPropagation()}   // clicks inside don't collapse
+          onClick={e => e.stopPropagation()}
           style={{
             padding:   '8px 12px 10px 124px',
             borderTop: '1px solid rgba(255,255,255,0.06)',
@@ -204,10 +218,12 @@ export default function TranscriptFeed({ events = [] }) {
     setAutoScroll(nearBottom)
   }
 
+  // Filter out empty/ping artifacts before rendering
+  const visible = events.filter(ev => ev && ev.content?.trim())
+
   return (
     <div className="panel" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-      {/* Header */}
       <div className="panel-header" style={{ justifyContent: 'space-between' }}>
         <span className="panel-label">Event Stream</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -233,18 +249,17 @@ export default function TranscriptFeed({ events = [] }) {
             </button>
           )}
           <span className="data-dim" style={{ fontSize: 10 }}>
-            {events.length} events
+            {visible.length} events
           </span>
         </div>
       </div>
 
-      {/* Scrollable event list */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
         style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}
       >
-        {events.length === 0 && (
+        {visible.length === 0 && (
           <div style={{
             padding:   '24px 16px',
             color:     'var(--text-3)',
@@ -256,7 +271,7 @@ export default function TranscriptFeed({ events = [] }) {
           </div>
         )}
 
-        {events.map((ev, i) => <EventRow key={i} ev={ev} />)}
+        {visible.map((ev, i) => <EventRow key={i} ev={ev} />)}
 
         <div ref={bottomRef} />
       </div>

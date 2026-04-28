@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from routes.run import router as run_router
 from routes.knowledge import router as knowledge_router
 from graph.init import init_agent
+from memory.vector_store import cleanup_old_documents
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,6 +48,9 @@ def ensure_coral_dirs():
     print("[startup] CORAL directory structure ready")
 
 
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FastAPI lifespan (startup + shutdown)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +68,9 @@ async def lifespan(app: FastAPI):
         print("[startup] Agent runtime initialized successfully")
     except Exception as e:
         print(f"[startup] Runtime initialization failed: {e}")
+
+
+    cleanup_old_documents(days=10)    
 
     # Startup diagnostics
     print(

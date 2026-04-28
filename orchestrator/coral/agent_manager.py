@@ -107,7 +107,7 @@ class AgentManager:
             task_name=task_name,
             task_description=task_description,
         )
-        print(f"[AgentManager] Workspaces created for: {self.agent_ids}")
+        
 
     # ── Start ────────────────────────────────────────────────────────────────
     async def start_all(self, query: str = ""):
@@ -122,11 +122,11 @@ class AgentManager:
         for agent_id in self.agent_ids:
             handle = AgentHandle(agent_id=agent_id)
             self._handles[agent_id] = handle
-            print(f"[AgentManager] Agent ready: {agent_id}")
+            
 
         # Start background monitor
         self._monitor_task = asyncio.create_task(self._monitor_loop())
-        print(f"[AgentManager] Monitor loop started — session={self.session_id}")
+       
 
     # ── Monitor loop ─────────────────────────────────────────────────────────
     async def _monitor_loop(self):
@@ -150,7 +150,7 @@ class AgentManager:
 
                 if current_count > last_attempt_count:
                     new_evals = current_count - last_attempt_count
-                    print(f"[Monitor] {new_evals} new attempt(s) — total={current_count}")
+                    
                     last_attempt_count = current_count
 
                     # Fire heartbeat for each agent that is active
@@ -162,7 +162,7 @@ class AgentManager:
                             improved=(self.memory.get_eval_count() % 3 != 0),  # simulate
                         )
                         if prompts:
-                            print(f"[Monitor] Heartbeat fired for {agent_id}: {len(prompts)} prompt(s)")
+                            
                             await self._event_queue.put({
                                 "type":     "heartbeat",
                                 "agent_id": agent_id,
@@ -172,9 +172,9 @@ class AgentManager:
 
                 # Detect stagnation across all agents
                 hb_status = self.heartbeat.get_status()
-                for agent_id, stag in hb_status["stagnation_counts"].items():
-                    if stag >= 5:
-                        print(f"[Monitor] Agent {agent_id} stagnant for {stag} evals — pivot recommended")
+                # for agent_id, stag in hb_status["stagnation_counts"].items():
+                #     if stag >= 5:
+                #         print(f"[Monitor] Agent {agent_id} stagnant for {stag} evals — pivot recommended")
 
                 # Push a status snapshot every 30s
                 if time.time() - last_check_time > 30:
@@ -188,8 +188,7 @@ class AgentManager:
 
             except asyncio.CancelledError:
                 break
-            except Exception as exc:
-                print(f"[Monitor] Error in monitor loop: {exc}")
+
 
     # ── Event queue ───────────────────────────────────────────────────────────
     async def get_next_event(self, timeout: float = 5.0) -> Optional[dict]:
@@ -229,7 +228,7 @@ class AgentManager:
         except Exception as exc:
             print(f"[AgentManager] Failed to save sessions: {exc}")
 
-        print(f"[AgentManager] All agents stopped — session={self.session_id}")
+        # print(f"[AgentManager] All agents stopped — session={self.session_id}")
 
     # ── Resume ────────────────────────────────────────────────────────────────
     async def resume(self, session_id: str):
@@ -239,21 +238,21 @@ class AgentManager:
         """
         sessions_path = PUBLIC_ROOT / "sessions.json"
         if not sessions_path.exists():
-            print(f"[AgentManager] No sessions.json found — starting fresh")
+            # print(f"[AgentManager] No sessions.json found — starting fresh")
             return
 
         sessions = json.loads(sessions_path.read_text())
         if session_id not in sessions:
-            print(f"[AgentManager] Session {session_id} not found — starting fresh")
+            # print(f"[AgentManager] Session {session_id} not found — starting fresh")
             return
 
         saved = sessions[session_id]
         self.agent_ids = saved.get("agent_ids", self.agent_ids)
-        print(f"[AgentManager] Resuming session {session_id} with agents: {self.agent_ids}")
+        # print(f"[AgentManager] Resuming session {session_id} with agents: {self.agent_ids}")
 
         # Load prior context from memory
         snapshot = self.memory.snapshot()
-        print(f"[AgentManager] Prior context: {snapshot['attempts']} attempts, {snapshot['notes']} notes")
+        # print(f"[AgentManager] Prior context: {snapshot['attempts']} attempts, {snapshot['notes']} notes")
 
     # ── Status ────────────────────────────────────────────────────────────────
     def status(self) -> dict:

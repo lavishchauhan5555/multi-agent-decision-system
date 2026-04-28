@@ -1,38 +1,41 @@
-import { useState } from 'react'
-
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import './index.css'
-import Home from './pages/Home'
-import Dashboard from './pages/Dashboard'
+import { AuthProvider }    from './context/AuthContext'
+import ProtectedRoute      from './components/ProtectedRoute'
+import Home                from './pages/Home'
+import Dashboard           from './pages/Dashboard'
+import Login               from './pages/Login'
+import Signup              from './pages/Signup'
+import KnowledgeBrowser    from './pages/KnowledgeBrowser'
+import History             from './pages/History'
+import ServerHealth        from './pages/ServerHealth'
 
-import './App.css'
-
-function App() {
-
-  // const sendMessage = async () => {
-  //   const res = await fetch("http://localhost:10000/api/chat", {
-  //     method: "POST",
-  //     headers: {
-  //       "Content-Type": "application/json",
-  //     },
-  //     body: JSON.stringify({ message: "Hello AI" }),
-  //   });
-
-  //   const data = await res.json();
-  //   console.log(data);
-  // };
+export default function App() {
   return (
-    <>
+    <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/login"  element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+
+          <Route path="/" element={
+            <ProtectedRoute><Home /></ProtectedRoute>
+          } />
+          <Route path="/dashboard" element={
+            <ProtectedRoute><Dashboard /></ProtectedRoute>
+          } />
+          <Route path="/knowledge" element={
+            <ProtectedRoute><KnowledgeBrowser /></ProtectedRoute>
+          } />
+          <Route path="/history" element={
+            <ProtectedRoute><History /></ProtectedRoute>
+          } />
+          <Route path="/server-health" element={
+            <ProtectedRoute><ServerHealth /></ProtectedRoute>
+          } />
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
-
-    </>
+    </AuthProvider>
   )
 }
-
-export default App

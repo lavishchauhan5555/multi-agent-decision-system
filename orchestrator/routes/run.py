@@ -29,6 +29,7 @@ from typing import Optional
 
 from graph.builder import graph
 from graph.state import AgentState
+from coral.memory import CoralMemory
 
 router = APIRouter()
 
@@ -56,6 +57,7 @@ class RunRequest(BaseModel):
 @router.post("/run")
 async def start_run(payload: RunRequest, background: BackgroundTasks):
     session_id = str(uuid.uuid4())
+    memory = CoralMemory(session_id=session_id, clean_old=True)
 
     q: asyncio.Queue = asyncio.Queue()
     active_sessions[session_id] = {"queue": q, "status": "running"}
@@ -157,33 +159,40 @@ async def stream_run(session_id: str):
     q: asyncio.Queue = session["queue"]
 
     async def event_generator():
-        """
-        Yield SSE frames until __done__ or __error__ is received.
+        KEEPALIVE_INTERVAL = 5.0     # check every 5 sec
+        MAX_IDLE_TIME = 30.0         # break after 30 sec no data
 
-        After yielding the terminal event, the generator returns normally.
-        FastAPI / Starlette detects the generator is exhausted and closes
-        the HTTP response, which sends EOF to the client.
-
-        Keep-alive frames are sent every 20 s of silence so proxies and
-        browsers do not close the connection prematurely.
-        """
-        KEEPALIVE_INTERVAL = 20.0   # seconds between keep-alive pings
+        last_event_time = time.time()
 
         while True:
             try:
                 event = await asyncio.wait_for(q.get(), timeout=KEEPALIVE_INTERVAL)
+                
+                last_event_time = time.time()  # ✅ reset timer
+
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+                if event.get("node") in ("__done__", "__error__"):
+                    break
+
             except asyncio.TimeoutError:
-                # No event yet — send a comment ping so the connection stays open
+                if time.time() - last_event_time > MAX_IDLE_TIME:
+                    print(f"[stream] idle timeout reached for {session_id}")
+
+                    session["status"] = "error"
+
+                    yield f"data: {json.dumps({
+                        'session_id': session_id,
+                        'node': '__timeout__',
+                        'timestamp': time.time(),
+                        'data': {
+                            'error': 'Stream closed because graph sent no events for 30 seconds'
+                        }
+                    }, default=str)}\n\n"
+
+                    break
+
                 yield ": keep-alive\n\n"
-                continue
-
-            # Serialise and emit the event
-            yield f"data: {json.dumps(event, default=str)}\n\n"
-
-            # Terminal events — yield first, THEN exit the loop so the
-            # client receives the frame before the connection is closed.
-            if event.get("node") in ("__done__", "__error__"):
-                break   # generator returns → response body closed → stream ends
 
     return StreamingResponse(
         event_generator(),

@@ -32,7 +32,7 @@ async def build_agent(tools):
 
     return (
         None,
-        model_hf.bind_tools(tools),
-        model_genai.bind_tools(tools),
-        grok_llm.bind_tools(tools),
+        model_hf,
+        model_genai,
+        grok_llm,
     )

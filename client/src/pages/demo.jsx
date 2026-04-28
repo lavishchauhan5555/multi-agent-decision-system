@@ -80,7 +80,7 @@ export default function Home() {
             </button>
           </Link>
 
-          <Link to="/server-health" style={{ textDecoration: 'none' }}>
+          <Link to="/health" style={{ textDecoration: 'none' }}>
             <button className="btn" style={{ padding: '6px 14px', fontSize: 11 }}>
               ♥ health
             </button>
@@ -141,7 +141,7 @@ export default function Home() {
           {[
             { to: '/history',   icon: '⟡', label: 'History',   desc: 'Past query runs' },
             { to: '/knowledge', icon: '✦', label: 'Knowledge',  desc: 'Notes · Skills · Leaderboard' },
-            { to: '/server-health',    icon: '♥', label: 'Server Health', desc: 'API · DB · agents' },
+            { to: '/health',    icon: '♥', label: 'Server Health', desc: 'API · DB · agents' },
           ].map(({ to, icon, label, desc }) => (
             <Link key={to} to={to} style={{ textDecoration: 'none' }}>
               <div
