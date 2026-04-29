@@ -22,6 +22,7 @@ from routes.run import router as run_router
 from routes.knowledge import router as knowledge_router
 from graph.init import init_agent
 from memory.vector_store import cleanup_old_documents
+from scripts.seed_prompts import seed_all
 
 
 
@@ -68,6 +69,10 @@ async def lifespan(app: FastAPI):
         print("[startup] Agent runtime initialized successfully")
     except Exception as e:
         print(f"[startup] Runtime initialization failed: {e}")
+
+
+        # ── Seed agent prompts into MongoDB (skips if already exist) ──
+    await seed_all()    
 
 
     cleanup_old_documents(days=10)    

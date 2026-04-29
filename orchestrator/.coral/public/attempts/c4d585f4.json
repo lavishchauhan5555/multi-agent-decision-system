@@ -1,0 +1,11 @@
+{
+  "commit_hash": "c4d585f4",
+  "agent_id": "critic",
+  "session_id": "e23a3b5a-c1b4-45af-8168-402a06e1a64e",
+  "output": "**Research Flaws**\n  - Unsupported market-size claim for the sustainable food delivery marketplace in tier-2 cities (USD 100 million in 2025)\n  - Lack of clear definition of 'sustainable' food delivery options\n  - No mention of regulatory hurdles or compliance challenges in tier-2 cities\n**Finance Flaws**\n  - CAC (Customer Acquisition Cost) not fully modeled or explicitly stated\n  - Churn rate assumptions not provided or supported by evidence\n  - ROI calculation flawed (negative ROI of -29.38%)\n",
+  "score": 0.31,
+  "feedback": "Confidence: 0.31 | Round: 1 | Stagnation: 0",
+  "status": "improved",
+  "parent_hash": null,
+  "timestamp": "2026-04-29T15:22:43.100579+00:00"
+}

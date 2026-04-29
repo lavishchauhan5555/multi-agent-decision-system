@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 graph/nodes.py
 ──────────────
@@ -31,9 +32,13 @@ LLM routing:
 import asyncio
 import json
 import re
+import os
 import time
 from typing import Any
 from datetime import datetime
+
+from langsmith import Client as LangSmithClient
+from db.mongo import get_collection
 
 from graph.state import AgentState
 from graph.structured_outputs import (
@@ -42,6 +47,7 @@ from graph.structured_outputs import (
     CompetitorOutput,
     CriticOutput,
     CEOOutput,
+    MonthlyProjection,
     structured_to_markdown,
 )
 
@@ -364,7 +370,7 @@ def _extract_json_candidates(text: str) -> list[str]:
 
 
 def _parse_json_response(raw: str, model_class):
-    print(f"[parser] calling PydanticOutputParser for {model_class.__name__}")
+    # print(f"[parser] calling PydanticOutputParser for {model_class.__name__}")
 
     if not raw or not isinstance(raw, str):
         return None, "Empty or non-string input"
@@ -379,7 +385,7 @@ def _parse_json_response(raw: str, model_class):
 
     last_err = "Unknown parse error"
 
-    # ✅ Try full response first
+    #  Try full response first
     try:
         parsed_json = json.loads(text)
         if isinstance(parsed_json, dict):
@@ -396,7 +402,7 @@ def _parse_json_response(raw: str, model_class):
         try:
             parsed_json = json.loads(candidate)
 
-            # ✅ Skip null, arrays, strings, numbers
+            #  Skip null, arrays, strings, numbers
             if not isinstance(parsed_json, dict):
                 continue
 
@@ -743,10 +749,17 @@ async def research_node(state: AgentState) -> dict:
     Input from state  : query (str), coral_notes (list[str]), critiques (list[str])
     Output to state   : research_output (str), debate_transcript entry
     """
-    print(
-        f"[research] round={state['round']} "
-        f"coral_notes={len(state.get('coral_notes', []))}"
-    )
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+
+
+
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        system = await load_stuck_prompt("research") or await load_prompt("research")
+    else:
+        system = await load_prompt("research")  # eval → base priority
 
     query        = state["query"]
     coral_notes  = state.get("coral_notes", [])
@@ -774,81 +787,21 @@ async def research_node(state: AgentState) -> dict:
         }
     search_context = await _run_one_research_search(tools, query)
 
-    system = (
-    "You are a senior research analyst in a multi-agent AI decision system.\n"
-    "You produce deep, structured, decision-grade market intelligence.\n\n"
 
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🔧 TOOL USAGE\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "- You will receive external search data in the prompt.\n"
-    "- DO NOT call tools yourself.\n"
-    "- Use provided search results + RAG as primary sources.\n\n"
 
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🧠 INFORMATION PRIORITY\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "1. RAG knowledge (most reliable)\n"
-    "2. Search results (for freshness)\n"
-    "3. CORAL memory (for improvements)\n\n"
+    # Append dynamic context to whatever prompt was loaded
+    schema = _schema_hint(ResearchOutput)
 
-    "- Never hallucinate missing data.\n"
-    "- If unsure → return 'data unavailable'.\n\n"
+    system += f"""
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📦 OUTPUT FORMAT
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {{
+    {schema}
+    }}
+    """
 
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "⚠️ CRITIQUE HANDLING\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "- You MUST address ALL critiques explicitly.\n"
-    "- Each critique must map to one improvement.\n"
-    "- Add explanations inside 'critique_responses'.\n\n"
-
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📊 DEPTH REQUIREMENTS (STRICT)\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "Minimum output quality:\n"
-
-    "- market_size: 2-4 detailed sentences with numbers.\n"
-    "- growth_rate: 2-3 sentences with CAGR or trend.\n"
-    "- trends: EXACTLY 6 items, each 15-30 words.\n"
-    "- key_players: EXACTLY 6 real companies.\n"
-    "- opportunities: EXACTLY 5 items (problem + business angle).\n"
-    "- risks: EXACTLY 5 items (cause + impact).\n"
-    "- evidence_points: 3-6 factual insights (numbers, stats, facts).\n"
-    "- raw_summary: 150-220 words.\n\n"
-
-    "🚫 If any section is too short or generic → output is INVALID.\n\n"
-
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📊 QUALITY RULES\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "- Use real-world data when possible.\n"
-    "- Avoid generic phrases like 'market is growing'.\n"
-    "- Each bullet must contain reasoning or data.\n"
-    "- Avoid repetition across fields.\n\n"
-
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "🚫 OUTPUT RULES (CRITICAL)\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "1. Return ONLY a single JSON object.\n"
-    "2. No markdown, no explanations.\n"
-    "3. No extra text before or after JSON.\n"
-    "4. Do NOT wrap JSON in arrays.\n\n"
-
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📌 FIELD RULES\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "- trends, key_players, opportunities, risks, critique_responses, evidence_points → arrays of strings\n"
-    "- market_size, growth_rate, raw_summary → strings\n"
-    "- If missing → use 'data unavailable' or ['data unavailable']\n\n"
-
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📦 OUTPUT FORMAT\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "{\n"
-    f"{_schema_hint(ResearchOutput)}\n"
-    "}"
-    )
-
+    
     human = f"""
     User Query:
     {query}
@@ -936,7 +889,15 @@ async def research_node(state: AgentState) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def finance_node(state: AgentState) -> dict:
-    print(f"[finance] round={state['round']}")
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+
+    system = (
+        await load_stuck_prompt("finance")
+        if is_stuck
+        else await load_prompt("finance")
+    )
 
     query = state["query"]
     critiques = state.get("critiques", [])
@@ -950,11 +911,9 @@ async def finance_node(state: AgentState) -> dict:
         if isinstance(s, dict)
     ) if coral_skills else "No reusable skills available."
 
-    # ─────────────────────────────────────────────────────────────────────
-    # 1. Finance assumptions
-    # These can come from state later if frontend provides them.
-    # ─────────────────────────────────────────────────────────────────────
-
+    # ─────────────────────────────────────────
+    # 1. Assumptions
+    # ─────────────────────────────────────────
     assumptions = {
         "initial_investment": float(state.get("initial_investment", 10000.0)),
         "starting_revenue": float(state.get("starting_revenue", 5000.0)),
@@ -962,68 +921,59 @@ async def finance_node(state: AgentState) -> dict:
         "monthly_fixed_cost": float(state.get("monthly_fixed_cost", 12000.0)),
         "gross_margin": float(state.get("gross_margin", 0.75)),
         "estimated_cac": float(state.get("estimated_cac", 800.0)),
-        "months": 12,
     }
 
     initial_investment = assumptions["initial_investment"]
     starting_revenue = assumptions["starting_revenue"]
-    monthly_growth_rate = assumptions["monthly_growth_rate"]
-    monthly_fixed_cost = assumptions["monthly_fixed_cost"]
-    gross_margin = assumptions["gross_margin"]
-    estimated_cac = assumptions["estimated_cac"]
+    growth = assumptions["monthly_growth_rate"]
+    fixed_cost = assumptions["monthly_fixed_cost"]
+    margin = assumptions["gross_margin"]
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────
     # 2. Deterministic calculations
-    # No LLM arithmetic.
-    # ─────────────────────────────────────────────────────────────────────
-
-    monthly_projections = []
-    cumulative_cashflow = -initial_investment
+    # ─────────────────────────────────────────
+    monthly_dicts = []
+    cumulative = -initial_investment
     payback_months = None
-    break_even_month = None
-    max_monthly_burn = 0.0
+    max_burn = 0.0
 
     for month in range(1, 13):
-        revenue = round(starting_revenue * ((1 + monthly_growth_rate) ** (month - 1)), 2)
-
-        # Gross-profit-aware model
-        gross_profit = round(revenue * gross_margin, 2)
-        cost = round(monthly_fixed_cost, 2)
+        revenue = round(starting_revenue * ((1 + growth) ** (month - 1)), 2)
+        gross_profit = round(revenue * margin, 2)
+        cost = round(fixed_cost, 2)
         net = round(gross_profit - cost, 2)
 
-        cumulative_cashflow = round(cumulative_cashflow + net, 2)
+        cumulative += net
 
         if net < 0:
-            max_monthly_burn = max(max_monthly_burn, abs(net))
+            max_burn = max(max_burn, abs(net))
 
-        if break_even_month is None and net >= 0:
-            break_even_month = month
-
-        if payback_months is None and cumulative_cashflow >= 0:
+        if payback_months is None and cumulative >= 0:
             payback_months = float(month)
 
-        monthly_projections.append({
+        monthly_dicts.append({
             "month": month,
             "revenue": revenue,
             "cost": cost,
             "net": net,
         })
 
-    total_revenue = round(sum(m["revenue"] for m in monthly_projections), 2)
-    operating_cost = round(sum(m["cost"] for m in monthly_projections), 2)
-
+    # totals
+    total_revenue = round(sum(m["revenue"] for m in monthly_dicts), 2)
+    operating_cost = round(sum(m["cost"] for m in monthly_dicts), 2)
     total_cost = round(operating_cost + initial_investment, 2)
-
-    # Net profit after operating costs + initial investment
-    net_profit = round(sum(m["net"] for m in monthly_projections) - initial_investment, 2)
-
+    net_profit = round(sum(m["net"] for m in monthly_dicts) - initial_investment, 2)
     roi_percent = round((net_profit / total_cost) * 100, 2) if total_cost else 0.0
 
-    estimated_runway_needed = round(initial_investment + max_monthly_burn * 6, 2)
+    # ✅ convert to Pydantic models (FIX)
+    monthly_models = [
+        MonthlyProjection.model_validate(m)
+        for m in monthly_dicts
+    ]
 
     base_finance_json = {
         "initial_investment": initial_investment,
-        "monthly_projections": monthly_projections,
+        "monthly_projections": monthly_models,
         "total_revenue": total_revenue,
         "total_cost": total_cost,
         "net_profit": net_profit,
@@ -1031,192 +981,70 @@ async def finance_node(state: AgentState) -> dict:
         "payback_months": payback_months,
     }
 
-    # ─────────────────────────────────────────────────────────────────────
-    # 3. Deterministic recommendation
-    # ─────────────────────────────────────────────────────────────────────
-
-    if net_profit > 0 and roi_percent >= 20 and payback_months is not None:
-        deterministic_recommendation = (
-            "GO — positive net profit, ROI above 20%, and payback visible within 12 months."
-        )
-    elif net_profit > 0 and payback_months is not None:
-        deterministic_recommendation = (
-            "CONDITIONAL GO — profitable, but ROI and payback quality should be improved before aggressive scaling."
-        )
-    elif net_profit < 0 and payback_months is None:
-        deterministic_recommendation = (
-            "NO-GO — projected 12-month ROI is negative and payback is not reached."
-        )
+    # ─────────────────────────────────────────
+    # 3. Recommendation
+    # ─────────────────────────────────────────
+    if net_profit > 0 and roi_percent >= 20:
+        rec = "GO — strong profitability and ROI"
+    elif net_profit > 0:
+        rec = "CONDITIONAL GO — profitable but optimize further"
     else:
-        deterministic_recommendation = (
-            "CONDITIONAL GO — proceed only after reducing fixed costs, validating CAC, and improving payback."
-        )
+        rec = "NO-GO — not financially viable"
 
-    # ─────────────────────────────────────────────────────────────────────
-    # 4. Safe deterministic fallback object
-    # ─────────────────────────────────────────────────────────────────────
-
+    # ─────────────────────────────────────────
+    # 4. Fallback object (ALREADY CORRECT TYPE)
+    # ─────────────────────────────────────────
     fallback_obj = FinanceOutput(
         **base_finance_json,
         financial_risks=[
-            (
-                f"Payback risk: payback_months={payback_months}, meaning the business "
-                "does not clearly recover its initial investment within the modeled period."
-            ),
-            (
-                f"CAC risk: estimated CAC is ${estimated_cac}, but customer acquisition cost "
-                "is not directly deducted from monthly projections, so real profit may be lower."
-            ),
-            (
-                f"Burn risk: maximum monthly burn is approximately ${max_monthly_burn}, "
-                f"so estimated runway needed is about ${estimated_runway_needed}."
-            ),
+            f"Payback risk: {payback_months}",
+            f"Burn risk: {max_burn}",
+            "CAC not fully modeled",
         ],
-        recommendation=deterministic_recommendation,
+        recommendation=rec,
         critique_responses=[
-            "Used deterministic calculations for all financial numbers instead of relying on LLM arithmetic.",
-            "Included initial investment in total cost and ROI calculation.",
-            "Added gross-margin-aware net calculation, payback risk, CAC risk, burn risk, and runway context.",
+            "Used deterministic calculations",
+            "Ensured correct ROI formula",
+            "Included risk analysis",
         ],
     )
 
-    # ─────────────────────────────────────────────────────────────────────
-    # 5. LLM only enriches risks/recommendation text
-    # It must not change numbers.
-    # ─────────────────────────────────────────────────────────────────────
-
-    system = (
-        "You are a senior startup finance analyst in a multi-agent AI decision system.\n"
-        "You MUST NOT call tools.\n"
-        "You MUST NOT perform new calculations.\n"
-        "Use the provided deterministic finance calculations exactly.\n\n"
-
-        "CRITICAL RULES:\n"
-        "1. Return ONLY valid JSON.\n"
-        "2. No markdown.\n"
-        "3. No explanation outside JSON.\n"
-        "4. Do not call calculator, search, Python, or any tool.\n"
-        "5. monthly_projections must contain exactly 12 items.\n"
-        "6. Do not change any numeric values.\n"
-        "7. financial_risks must contain exactly 3 detailed strings.\n"
-        "8. critique_responses must be an array of strings.\n"
-        "9. recommendation must be one of: GO, NO-GO, CONDITIONAL GO, followed by a short reason.\n\n"
-
-        "DECISION LOGIC:\n"
-        "- If ROI is negative and payback_months is null, prefer NO-GO.\n"
-        "- If profit is positive but risk is high, use CONDITIONAL GO.\n"
-        "- Use GO only when profit, ROI, and payback are strong.\n\n"
-
-        "Return JSON matching this schema:\n"
-        f"{_schema_hint(FinanceOutput)}"
-    )
-
-    human = f"""
-Business Idea:
-{query}
-
-Available Reusable Skills:
-{skills_context}
-
-Critiques to Address:
-{critique_context}
-
-Assumptions Used:
-{json.dumps(assumptions, indent=2)}
-
-Extra Deterministic Metrics:
-{json.dumps({
-    "break_even_month": break_even_month,
-    "max_monthly_burn": max_monthly_burn,
-    "estimated_runway_needed": estimated_runway_needed,
-    "operating_cost": operating_cost,
-    "gross_margin": gross_margin,
-    "estimated_cac": estimated_cac
-}, indent=2)}
-
-Deterministic Finance Calculations:
-{json.dumps(base_finance_json, indent=2)}
-
-Required:
-Return a complete FinanceOutput JSON object.
-
-You MUST use the exact numeric values from Deterministic Finance Calculations.
-Only improve:
-- financial_risks
-- recommendation
-- critique_responses
-"""
-
-    # ─────────────────────────────────────────────────────────────────────
-    # 6. Runtime model
-    # IMPORTANT: build_agent() must store plain models, not bind_tools().
-    # ─────────────────────────────────────────────────────────────────────
-
-    rt = _get_runtime()
-    base_llm = getattr(rt, "hf", None) if rt else None
-
-    print(
-        f"[finance] llm={type(base_llm).__name__ if base_llm else 'STUB'} "
-        "tools=DISABLED_FOR_FINANCE"
-    )
-
+    # ─────────────────────────────────────────
+    # 5. LLM (optional)
+    # ─────────────────────────────────────────
     obj = fallback_obj
+    rt = _get_runtime()
+    llm = getattr(rt, "hf", None) if rt else None
 
-    if base_llm is not None:
+    if llm:
         try:
-            response = await asyncio.wait_for(
-                base_llm.ainvoke(_build_messages(system, human)),
-                timeout=60,
-            )
+            response = await llm.ainvoke(_build_messages(system, query))
+            raw = unwrap_ai_text(_safe_content(response))
 
-            raw_output = unwrap_ai_text(_safe_content(response))
-            print("[finance] raw_output preview:", raw_output[:500])
+            parsed, err = _parse_json_response(raw, FinanceOutput)
 
-            parsed_obj, err = _parse_json_response(raw_output, FinanceOutput)
+            if parsed:
+                obj = parsed
 
-            if parsed_obj:
-                obj = parsed_obj
+                # ✅ FORCE correct types again
+                obj.monthly_projections = monthly_models
+                obj.initial_investment = initial_investment
+                obj.total_revenue = total_revenue
+                obj.total_cost = total_cost
+                obj.net_profit = net_profit
+                obj.roi_percent = roi_percent
+                obj.payback_months = payback_months
 
-                # Safety: force deterministic numbers even if LLM changed them
-                obj.initial_investment = base_finance_json["initial_investment"]
-                obj.monthly_projections = base_finance_json["monthly_projections"]
-                obj.total_revenue = base_finance_json["total_revenue"]
-                obj.total_cost = base_finance_json["total_cost"]
-                obj.net_profit = base_finance_json["net_profit"]
-                obj.roi_percent = base_finance_json["roi_percent"]
-                obj.payback_months = base_finance_json["payback_months"]
-
-            else:
-                print(f"[finance] LLM structured parse failed, using fallback: {err}")
-                obj = fallback_obj
-
-        except Exception as exc:
-            print(f"[finance] LLM failed, using fallback: {exc}")
+        except Exception:
             obj = fallback_obj
 
-    # ─────────────────────────────────────────────────────────────────────
-    # 7. Final output
-    # ─────────────────────────────────────────────────────────────────────
-
-    structured_output = structured_to_markdown(obj)
-
-
-
+    # ─────────────────────────────────────────
+    # 6. Output
+    # ─────────────────────────────────────────
     return {
-        "finance_output": structured_output,
-
-        # Optional but useful for frontend/CEO/critic if your AgentState allows it
-        "finance_json": obj.model_dump(),
-
-        "debate_transcript": [{
-            "agent": "finance",
-            "round": state["round"],
-            "content": structured_output,
-            "timestamp": time.time(),
-        }],
+        "finance_output": structured_to_markdown(obj),
+        "finance_json": obj.model_dump(),  # ✅ NO WARNINGS NOW
     }
-
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1224,6 +1052,14 @@ Only improve:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def competitor_node(state: AgentState) -> dict:
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        system = await load_stuck_prompt("competitor") or await load_prompt("competitor")
+    else:
+        system = await load_prompt("competitor")  # eval → base priority
    
 
     query = state["query"]
@@ -1271,72 +1107,47 @@ async def competitor_node(state: AgentState) -> dict:
 
     current_year = datetime.now().year
 
-    system = (
-        "You are a senior competitive intelligence analyst in a multi-agent AI decision system.\n"
-        "You produce current, evidence-backed competitor analysis for startup decisions.\n\n"
 
-        "TOOL RULES:\n"
-        "- You will receive external search results in the prompt.\n"
-        "- DO NOT call tools yourself.\n"
-        "- Use the provided search results to verify current competitors.\n\n"
+     # Append dynamic context to whatever prompt was loaded
+    schema = _schema_hint(CompetitorOutput)
 
-        "CURRENTNESS RULES:\n"
-        f"- Prefer data from {current_year - 1} and {current_year}.\n"
-        "- Avoid outdated competitors unless they are still active and relevant.\n"
-        "- If market share or funding is not verifiable, use 'unknown'.\n\n"
+    system += f"""
 
-        "STRICT COMPETITOR RULES:\n"
-        "- Only include real companies.\n"
-        "- Do not invent market share, funding, or traction.\n"
-        "- Each competitor must have 2-3 strengths and 2-3 weaknesses.\n"
-        "- Identify 3-5 competitors.\n"
-        "- Identify 2-3 market gaps.\n"
-        "- differentiation_strategy must be 2-4 detailed sentences.\n"
-        "- evidence_points must include 3-6 specific facts from search/RAG.\n\n"
-
-        "CRITIQUE RULES:\n"
-        "- Address every critique explicitly in critique_responses.\n"
-        "- Use approaches_to_avoid from CORAL memory.\n\n"
-
-        "OUTPUT RULES:\n"
-        "- Return ONLY valid JSON.\n"
-        "- No markdown.\n"
-        "- No explanation outside JSON.\n"
-        "- Do not wrap JSON in an array.\n\n"
-
-        "Return JSON matching this schema:\n"
-        f"{_schema_hint(CompetitorOutput)}"
-    )
+    {{
+    {schema}
+    }}
+    """
+    
 
     human = f"""
-Business Idea:
-{query}
+    Business Idea:
+    {query}
 
-Current Search Results:
-{search_context}
+    Current Search Results:
+    {search_context}
 
-Approaches to Avoid from CORAL Memory:
-{avoid_context}
+    Approaches to Avoid from CORAL Memory:
+    {avoid_context}
 
-Critiques to Address:
-{critique_context}
+    Critiques to Address:
+    {critique_context}
 
-Task:
-Generate a production-grade competitor analysis.
+    Task:
+    Generate a production-grade competitor analysis.
 
-Required:
-- 3-5 real competitors
-- 2-3 strengths per competitor
-- 2-3 weaknesses per competitor
-- market_share_or_funding if verifiable, otherwise "unknown"
-- 2-3 market gaps
-- 2-4 sentence differentiation strategy
-- approaches_to_avoid as list
-- critique_responses as list
-- evidence_points as list
+    Required:
+    - 3-5 real competitors
+    - 2-3 strengths per competitor
+    - 2-3 weaknesses per competitor
+    - market_share_or_funding if verifiable, otherwise "unknown"
+    - 2-3 market gaps
+    - 2-4 sentence differentiation strategy
+    - approaches_to_avoid as list
+    - critique_responses as list
+    - evidence_points as list
 
-Return ONLY valid JSON.
-"""
+    Return ONLY valid JSON.
+    """
 
 
 
@@ -1412,6 +1223,14 @@ Return ONLY valid JSON.
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def critic_node(state: AgentState) -> dict:
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        system = await load_stuck_prompt("critic") or await load_prompt("critic")
+    else:
+        system = await load_prompt("critic")  # eval → base priority
     # print(f"[critic] round={state['round']} — evaluating outputs")
 
     research = state.get("research_output", "[no output]")
@@ -1464,46 +1283,16 @@ async def critic_node(state: AgentState) -> dict:
     if base_llm is None:
         obj = fallback_obj
     else:
-        system = (
-            "You are a strict startup critic, investment committee reviewer, and risk analyst.\n"
-            "You evaluate research, finance, and competitor outputs for decision quality.\n\n"
 
-            "TOOL RULES:\n"
-            "- You already received fact-check data in the prompt.\n"
-            "- DO NOT call tools yourself.\n\n"
+        # Append dynamic context to whatever prompt was loaded
+        schema = _schema_hint(CriticOutput)
 
-            "EVALUATION STANDARD:\n"
-            "- Be skeptical and specific.\n"
-            "- Penalize unsupported market-size claims.\n"
-            "- Penalize unrealistic finance assumptions.\n"
-            "- Penalize weak competitor validation.\n"
-            "- Reward only evidence-backed, internally consistent analysis.\n\n"
+        system += f"""
 
-            "CONFIDENCE SCORING:\n"
-            "- 0.00-0.30 = severe flaws, unreliable decision.\n"
-            "- 0.31-0.50 = major gaps remain.\n"
-            "- 0.51-0.70 = usable but needs another refinement round.\n"
-            "- 0.71-0.84 = strong but not final-grade.\n"
-            "- 0.85-1.00 = investment-grade confidence.\n\n"
-
-            "STRICT OUTPUT RULES:\n"
-            "- Return ONLY valid JSON.\n"
-            "- No markdown.\n"
-            "- No explanation outside JSON.\n"
-            "- Never return null for list fields.\n"
-            "- Use [] or ['data unavailable'] for missing list values.\n\n"
-
-            "FIELD REQUIREMENTS:\n"
-            "- research_flaws: 3-5 strings.\n"
-            "- finance_flaws: 1-5 strings.\n"
-            "- competitor_flaws: 1-5 strings.\n"
-            "- top_risks: exactly 3 strings.\n"
-            "- confidence_score: float between 0.0 and 1.0.\n"
-            "- reasoning: 3-5 sentence string.\n\n"
-
-            "Return JSON matching this schema:\n"
-            f"{_schema_hint(CriticOutput)}"
-        )
+        {{
+        {schema}
+        }}
+        """
 
         human = f"""
 Business Idea:
@@ -1605,8 +1394,10 @@ async def heartbeat_node(state: AgentState) -> dict:
     Output to state   : heartbeat_action (str), heartbeat_prompts (list[str]),
                         debate_transcript entry
     """
+    import asyncio
     from coral.memory import CoralMemory
     from coral.heartbeat import HeartbeatRunner
+    from db.mongo import get_collection
 
     session_id = state["session_id"]
     round_num  = state["round"]
@@ -1619,7 +1410,6 @@ async def heartbeat_node(state: AgentState) -> dict:
     memory    = CoralMemory(session_id=session_id)
     heartbeat = HeartbeatRunner(memory)
 
-    # critiques is list[str] — last entry is the most recent clean text
     last_critique = state.get("critiques", ["(no critique)"])[-1]
     if isinstance(last_critique, dict):
         last_critique = str(last_critique)
@@ -1645,6 +1435,7 @@ async def heartbeat_node(state: AgentState) -> dict:
             subfolder="agent-critic",
         )
 
+    # ── Routing ───────────────────────────────────────────────────────────────
     if confidence >= threshold:
         action = "exit"
     elif round_num >= max_rounds:
@@ -1654,6 +1445,35 @@ async def heartbeat_node(state: AgentState) -> dict:
     else:
         action = "refine"
 
+    # ── On pivot: activate existing stuck prompts in MongoDB ──────────────────
+    if action == "pivot":
+        AGENTS = ["research", "finance", "competitor", "critic", "ceo"]
+
+        async def _activate_stuck_prompt(agent_id: str) -> None:
+            try:
+                col = await get_collection("prompts")
+
+                # Deactivate ALL prompts for this agent first
+                await col.update_many(
+                    {"agentId": agent_id},
+                    {"$set": {"active": False}},
+                )
+
+                # Activate the stuck prompt only (latest version)
+                result = await col.find_one_and_update(
+                    {"agentId": agent_id, "promptType": "stuck"},
+                    {"$set": {"active": True}},
+                    sort=[("version", -1)],
+                )
+                if result:
+                    print(f"[heartbeat] stuck prompt activated — {agent_id} v{result.get('version', '?')}")
+                else:
+                    print(f"[heartbeat] no stuck prompt found for {agent_id} — staying on current")
+            except Exception as exc:
+                print(f"[heartbeat] stuck activation failed for {agent_id}: {exc}")
+
+        await asyncio.gather(*[_activate_stuck_prompt(aid) for aid in AGENTS])
+
     # print(
     #     f"[heartbeat] round={round_num} confidence={confidence:.2f} "
     #     f"stagnation={stagnation} action={action} prompts={len(prompts)}"
@@ -1661,7 +1481,7 @@ async def heartbeat_node(state: AgentState) -> dict:
 
     return {
         "heartbeat_action":  action,
-        "heartbeat_prompts": prompts,          # list[str] — clean text
+        "heartbeat_prompts": prompts,
         "debate_transcript": [{
             "agent":     "heartbeat",
             "round":     round_num,
@@ -1673,12 +1493,12 @@ async def heartbeat_node(state: AgentState) -> dict:
         }],
     }
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 7 — CEO Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def ceo_node(state: AgentState) -> dict:
+
     """
     Production CEO node.
     Manual validation search + plain LLM call + deterministic fallback.
@@ -1686,6 +1506,14 @@ async def ceo_node(state: AgentState) -> dict:
 
     from coral.memory import CoralMemory
     from coral.grader import Grader
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        system = await load_stuck_prompt("ceo") or await load_prompt("ceo")
+    else:
+        system = await load_prompt("ceo")  # eval → base priority
 
     session_id = state["session_id"]
     confidence = float(state.get("confidence_score", 0.5))
@@ -1762,43 +1590,17 @@ async def ceo_node(state: AgentState) -> dict:
     if base_llm is None:
         obj = fallback_obj
     else:
-        system = (
-            "You are the CEO and investment committee chair of a venture-backed AI company.\n"
-            "You make the final go/no-go decision using research, finance, competitor analysis, critic feedback, and validation context.\n\n"
 
-            "TOOL RULES:\n"
-            "- You already received final validation search context in the prompt.\n"
-            "- DO NOT call tools yourself.\n\n"
+        # Append dynamic context to whatever prompt was loaded
+        schema = _schema_hint(CEOOutput)
 
-            "DECISION STANDARD:\n"
-            "- Be commercially realistic and conservative.\n"
-            "- Do not recommend PROCEED unless evidence, finance, and differentiation are strong.\n"
-            "- If critic confidence is below 0.65, prefer DO NOT PROCEED or CONDITIONAL PROCEED.\n"
-            "- If finance shows negative ROI/no payback, avoid PROCEED unless there is a strong staged-validation plan.\n"
-            "- If competitor differentiation is weak, avoid PROCEED.\n\n"
+        system += f"""
 
-            "RECOMMENDATION RULES:\n"
-            "- recommendation must be exactly one of: PROCEED, DO NOT PROCEED, CONDITIONAL PROCEED.\n"
-            "- confidence_percent must be between 0 and 100.\n"
-            "- reasoning must be 3-5 sentences.\n"
-            "- key_success_conditions must contain exactly 3 strings.\n"
-            "- risk_mitigations must contain exactly 3 strings.\n"
-            "- critic_concerns_addressed must contain 1-5 strings.\n\n"
+         {{
+        {schema}
+        }}
+         """
 
-            "NULL SAFETY RULE:\n"
-            "- Never return null for any field.\n"
-            "- Use [] or ['data unavailable'] for missing list fields.\n"
-            "- Use 'data unavailable' for missing string fields.\n\n"
-
-            "STRICT OUTPUT RULES:\n"
-            "- Return ONLY valid JSON.\n"
-            "- No markdown.\n"
-            "- No explanation outside JSON.\n"
-            "- Do not wrap JSON in an array.\n\n"
-
-            "Return JSON matching this schema:\n"
-            f"{_schema_hint(CEOOutput)}"
-        )
 
         human = f"""
 Business Idea:
@@ -1948,38 +1750,476 @@ Return ONLY valid JSON.
             "timestamp": time.time(),
         }],
     }
+
+
+
+
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# NODE 8 — Meta-Eval
+# NODE 8 — Meta-Eval inside this all logic of this node is added
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def meta_eval_node(state: AgentState) -> dict:
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+META_EVAL_SCORE_THRESHOLD = 0.72   # matches Session.threshold default (0.85 is CEO; 0.72 for meta-eval quality)
+LANGSMITH_PROJECT         = os.getenv("LANGCHAIN_PROJECT", "autonomous-decision-lab")
+ 
+# Agent IDs whose prompts may be optimized
+OPTIMIZABLE_AGENTS = ["research", "finance", "competitor", "critic", "ceo"]
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. LangSmith fetch
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _fetch_langsmith_metrics(session_id: str) -> dict[str, Any]:
+    try:
+        ls = LangSmithClient()
+        runs = list(ls.list_runs(
+            project_name=LANGSMITH_PROJECT,
+            run_name=session_id,
+            limit=1,
+        ))
+        if not runs:
+            return {}
+        run = runs[0]
+        latency_ms = (
+            int((run.end_time - run.start_time).total_seconds() * 1000)
+            if run.end_time and run.start_time else 0
+        )
+        return {
+            "latency_ms":        latency_ms,
+            "total_tokens":      getattr(run, "total_tokens", 0) or 0,
+            "prompt_tokens":     getattr(run, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(run, "completion_tokens", 0) or 0,
+            "run_id":            str(run.id),
+        }
+    except Exception as exc:
+        print(f"[meta_eval] langsmith fetch failed: {exc}")
+        return {}
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Evaluation Agent  — reasoning quality score
+# ─────────────────────────────────────────────────────────────────────────────
+
+ 
+async def _run_evaluation_agent(
+    state: AgentState,
+    final_decision: str,
+    reasoning_summary: str,
+    critiques: list,
+    confidence_score: float,
+) -> dict[str, Any]:
     """
-    Post-decision quality evaluation. No LLM call.
-    Returns safe empty defaults so state reducers never receive None.
- 
-    Input from state  : final_decision (str), confidence_score (float),
-                        round (int), session_id (str)
-    Output to state   : {} with safe defaults (logging only in Phase 2)
+    Calls the LLM to score the final decision.
+    Returns score dict with overall_score key.
     """
-    # Safely coerce every field — never trust state values to be non-None
-    final   = state.get("final_decision")   or ""
-    score   = state.get("confidence_score") or 0.0
-    rounds  = state.get("round")            or 0
-    session = state.get("session_id")       or "unknown"
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        _EVAL_SYSTEM = await load_stuck_prompt("meta_eval") or await load_prompt("meta_eval")
+    else:
+        _EVAL_SYSTEM = await load_prompt("meta_eval")  # eval → base priority
+    rt = _get_runtime()
+    llm = (
+        getattr(rt, "hf", None)
+        or getattr(rt, "gemini", None)
+        or getattr(rt, "grok", None)
+    ) if rt else None
  
-    # print(
-    #     f"[meta_eval] session={session} rounds={rounds} "
-    #     f"confidence={score:.2f} decision_length={len(final)}"
-    # )
- 
-    # Return safe defaults so downstream reducers never get None
-    return {
-        "final_decision":    final   or "",
-        "reasoning_summary": state.get("reasoning_summary") or "",
-        "coral_notes":       state.get("coral_notes")       or [],
-        "coral_attempts":    state.get("coral_attempts")    or [],
-        "coral_skills":      state.get("coral_skills")      or [],
-        "critiques":         state.get("critiques")         or [],
-        "debate_transcript": state.get("debate_transcript") or [],
+    fallback = {
+        "reasoning_quality": confidence_score,
+        "consistency":       confidence_score,
+        "accuracy":          confidence_score,
+        "completeness":      confidence_score,
+        "overall_score":     confidence_score,
+        "feedback":          "Fallback score — LLM unavailable.",
     }
  
+    if llm is None:
+        return fallback
+ 
+    critique_sample = (critiques[-1][:500] if critiques else "None")
+ 
+    human = f"""
+Final Decision (truncated to 1200 chars):
+{final_decision[:1200]}
+ 
+Reasoning Summary:
+{reasoning_summary[:400]}
+ 
+Last Critique:
+{critique_sample}
+ 
+Critic Confidence Score: {confidence_score:.2f}
+ 
+Evaluate the decision and return JSON only.
+"""
+    try:
+        response = await asyncio.wait_for(
+            llm.ainvoke(_build_messages(_EVAL_SYSTEM, human)),
+            timeout=40,
+        )
+        raw = unwrap_ai_text(_safe_content(response))
+        import json, re
+        raw = re.sub(r"```json|```", "", raw).strip()
+        parsed = json.loads(raw)
+        # Ensure overall_score exists
+        if "overall_score" not in parsed:
+            vals = [v for k, v in parsed.items() if isinstance(v, float)]
+            parsed["overall_score"] = round(sum(vals) / len(vals), 4) if vals else confidence_score
+        return parsed
+    except Exception as exc:
+        print(f"[meta_eval] evaluation agent failed: {exc}")
+        return fallback
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Prompt Optimization Agent
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+async def _run_prompt_optimization_agent(
+    state: AgentState,
+    agent_id: str,
+    current_prompt: str,
+    eval_feedback: str,
+    eval_scores: dict,
+    query: str,
+) -> str | None:
+    """
+    Rewrites the system prompt for agent_id.
+    Returns the new prompt string, or None on failure.
+    """
+    from agents.prompt_loader import load_prompt, load_stuck_prompt
+    # Detect stuck — use stuck prompt if available
+    is_stuck = (state.get("evals_since_improvement") or 0) >= 5
+    
+    if is_stuck:
+        _PROMPT_OPT_SYSTEM = await load_stuck_prompt("prompt_optimizer") or await load_prompt("prompt_optimizer")
+    else:
+        _PROMPT_OPT_SYSTEM = await load_prompt("prompt_optimizer")  # eval → base priority
+    rt = _get_runtime()
+    llm = (
+        getattr(rt, "grok", None)
+        or getattr(rt, "gemini", None)
+        or getattr(rt, "hf", None)
+    ) if rt else None
+ 
+    if llm is None:
+        print(f"[prompt_opt] LLM unavailable — skipping optimization for {agent_id}")
+        return None
+ 
+    score_summary = ", ".join(f"{k}={v:.2f}" for k, v in eval_scores.items() if k != "feedback")
+ 
+    human = f"""
+Agent ID: {agent_id}
+ 
+Original Query that triggered low score:
+{query[:400]}
+ 
+Evaluation Scores: {score_summary}
+Evaluation Feedback: {eval_feedback}
+ 
+Current System Prompt:
+{current_prompt[:3000]}
+ 
+Rewrite the system prompt to address the evaluation feedback.
+Return ONLY the new prompt text.
+"""
+    try:
+        response = await asyncio.wait_for(
+            llm.ainvoke(_build_messages(_PROMPT_OPT_SYSTEM, human)),
+            timeout=60,
+        )
+        new_prompt = unwrap_ai_text(_safe_content(response)).strip()
+        return new_prompt if len(new_prompt) > 50 else None
+    except Exception as exc:
+        print(f"[prompt_opt] failed for {agent_id}: {exc}")
+        return None
+ 
+ 
+async def _save_optimized_prompt_to_mongo(
+    agent_id: str,
+    new_prompt: str,
+    eval_score: float,
+) -> None:
+    """
+    Mirrors the Prompt schema from models/index.js:
+      agentId, version (auto-incremented), content, score, active
+    Deactivates all previous versions for this agent, then inserts v+1.
+    """
+    try:
+        col = await get_collection("prompts")
+ 
+        # Find current max version for this agent
+        latest = await col.find_one(
+            {"agentId": agent_id},
+            sort=[("version", -1)],
+        )
+        next_version = (latest["version"] + 1) if latest else 1
+ 
+        # Deactivate all old versions
+        await col.update_many(
+            {"agentId": agent_id},
+            {"$set": {"active": False}},
+        )
+ 
+        # Insert new version
+        await col.insert_one({
+            "agentId":   agent_id,
+            "promptType": "eval",
+            "version":   next_version,
+            "content":   new_prompt,
+            "score":     eval_score,
+            "active":    True,
+            "createdAt": time.time(),
+            "updatedAt": time.time(),
+        })
+        print(f"[prompt_opt] saved {agent_id} v{next_version} score={eval_score:.2f}")
+    except Exception as exc:
+        print(f"[prompt_opt] mongo save failed for {agent_id}: {exc}")
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Store result to MongoDB  (Session + Leaderboard)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+async def _store_result(state: AgentState, eval_scores: dict, ls_metrics: dict) -> None:
+    """
+    Updates the Session document and writes a Leaderboard entry.
+    Mirrors Session and Leaderboard schemas from models/index.js.
+    """
+    session_id    = state.get("session_id") or "unknown"
+    final         = state.get("final_decision") or ""
+    overall_score = eval_scores.get("overall_score", 0.0)
+ 
+    try:
+        sessions = await get_collection("sessions")
+        await sessions.update_one(
+            {"sessionId": session_id},
+            {"$set": {
+                "status":          "done",
+                "confidenceScore": state.get("confidence_score", 0.0),
+                "bestScore":       max(state.get("best_score", 0.0), overall_score),
+                "finalDecision":   final[:2000],
+                "completedAt":     time.time(),
+                "updatedAt":       time.time(),
+                # store LangSmith metrics as extra fields
+                "latencyMs":       ls_metrics.get("latency_ms", 0),
+                "totalTokens":     ls_metrics.get("total_tokens", 0),
+            }},
+            upsert=False,
+        )
+    except Exception as exc:
+        print(f"[meta_eval] session update failed: {exc}")
+ 
+    try:
+        lb = await get_collection("leaderboards")
+        await lb.insert_one({
+            "sessionId": session_id,
+            "query":     state.get("query", ""),
+            "score":     overall_score,
+            "decision":  final[:500],
+            "rounds":    state.get("round", 0),
+            "agentId":   "meta_eval",
+            "output":    {
+                "eval_scores": eval_scores,
+                "ls_metrics":  ls_metrics,
+            },
+            "feedback":  eval_scores.get("feedback", ""),
+            "createdAt": time.time(),
+            "updatedAt": time.time(),
+        })
+    except Exception as exc:
+        print(f"[meta_eval] leaderboard insert failed: {exc}")
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# NODE 8 — Main entry point
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+async def meta_eval_node(state: AgentState) -> dict:
+    from coral.memory import CoralMemory
+    from coral.grader import Grader
+    """
+    Post-decision quality evaluation node.
+
+    Pipeline:
+      1. LangSmith fetch  — latency + tokens (fallback: local timer)
+      2. Evaluation Agent — reasoning quality score (4 dimensions)
+      3. Threshold check
+         ├─ below  → Prompt Optimization Agent → save new prompt v+1 to MongoDB
+         └─ above  → store result only
+      4. Update Session + Leaderboard in MongoDB
+      5. Return safe state defaults (no reducer ever receives None)
+    """
+
+    # ── Safe coercions ───────────────────────────────────────────────────────
+    final             = state.get("final_decision")      or ""
+    confidence_score  = float(state.get("confidence_score") or 0.0)
+    rounds            = state.get("round")               or 0
+    session_id        = state.get("session_id")          or "unknown"
+    query             = state.get("query")               or ""
+    critiques         = state.get("critiques")           or []
+    reasoning_summary = state.get("reasoning_summary")   or ""
+
+    # ── Step 1: LangSmith metrics (local timer fallback) ─────────────────────
+    _node_start = time.time()
+
+    ls_metrics = _fetch_langsmith_metrics(session_id)
+
+    if not ls_metrics:
+        ls_metrics = {
+            "latency_ms":        int((time.time() - _node_start) * 1000),
+            "total_tokens":      0,
+            "prompt_tokens":     0,
+            "completion_tokens": 0,
+            "run_id":            session_id,
+        }
+
+    # print(
+    #     f"[meta_eval] session={session_id} rounds={rounds} "
+    #     f"confidence={confidence_score:.2f} "
+    #     f"latency={ls_metrics.get('latency_ms', 'N/A')}ms "
+    #     f"tokens={ls_metrics.get('total_tokens', 'N/A')}"
+    # )
+
+    # ── Step 2: Evaluation Agent ─────────────────────────────────────────────
+    eval_scores = await _run_evaluation_agent(
+        state             = state,
+        final_decision    = final,
+        reasoning_summary = reasoning_summary,
+        critiques         = critiques,
+        confidence_score  = confidence_score,
+    )
+    overall_score = float(eval_scores.get("overall_score", confidence_score))
+    eval_feedback = eval_scores.get("feedback", "")
+
+    # print(
+    #     f"[meta_eval] eval overall={overall_score:.2f} "
+    #     f"threshold={META_EVAL_SCORE_THRESHOLD} feedback='{eval_feedback}'"
+    # )
+
+    # ── Step 3: Threshold branch ─────────────────────────────────────────────
+    if overall_score < META_EVAL_SCORE_THRESHOLD:
+        # print(f"[meta_eval] score below threshold — running prompt optimization")
+
+        async def _optimize_one(agent_id: str) -> None:
+            try:
+                col = await get_collection("prompts")
+                doc = await col.find_one(
+                    {"agentId": agent_id, "active": True},
+                    sort=[("version", -1)],
+                )
+                current_prompt = doc["content"] if doc else f"You are the {agent_id} agent."
+            except Exception:
+                current_prompt = f"You are the {agent_id} agent."
+
+            new_prompt = await _run_prompt_optimization_agent(
+                state          = state,
+                agent_id       = agent_id,
+                current_prompt = current_prompt,
+                eval_feedback  = eval_feedback,
+                eval_scores    = eval_scores,
+                query          = query,
+            )
+            if new_prompt:
+                await _save_optimized_prompt_to_mongo(agent_id, new_prompt, overall_score)
+
+        await asyncio.gather(*[_optimize_one(aid) for aid in OPTIMIZABLE_AGENTS])
+    else:
+        print(f"[meta_eval] score above threshold — storing result only")
+
+    # ── Step 4: Store result ─────────────────────────────────────────────────
+    await _store_result(state, eval_scores, ls_metrics)
+
+    # ── Step 5: Safe state return ────────────────────────────────────────────
+    existing_transcript = state.get("debate_transcript") or []
+
+
+
+    session_id = state["session_id"]
+    memory = CoralMemory(session_id=session_id)
+    grader = Grader()
+
+    final_decision = state.get("final_decision", "")
+    critiques = state.get("critiques", [])
+    research = state.get("research_output", "")
+
+    # ── Evaluate decision ─────────────────────────────────────────
+    grade = grader.grade(
+        decision=final_decision,
+        critiques=critiques,
+        research=research,
+    )
+
+    score = grade.score
+    # print(f"[meta_eval] score={score:.2f}")
+
+    # ── ✅ WRITE SKILL ONLY IF GOOD RESULT ─────────────────────────
+    if score >= 0.75:
+        try:
+            skill_name = f"decision-strategy-{session_id[:6]}"
+
+            skill_description = (
+                "High-performing decision strategy derived from successful agent collaboration. "
+                "This approach integrates research validation, financial reasoning, competitor analysis, "
+                "and critic feedback to produce strong decisions."
+            )
+
+            skill_script = f"""
+def apply_strategy(input_data):
+    # Derived from successful run
+    return {{
+        "query": "{state.get("query", "")}",
+        "confidence": {state.get("confidence_score", 0)},
+        "score": {score},
+        "recommendation": "Reuse this structured reasoning approach for similar startup decisions."
+    }}
+"""
+
+            memory.write_skill(
+                name=skill_name,
+                description=skill_description,
+                script=skill_script,
+                creator="meta_eval",
+                results=f"Score={score}, session={session_id}"
+            )
+
+            # print(f"[meta_eval]  skill created: {skill_name}")
+
+        except Exception as exc:
+            print("")
+
+    else:
+        print("")
+
+
+ 
+
+
+    return {
+        "final_decision":    final or "",
+        "reasoning_summary": reasoning_summary or "",
+        "coral_notes":       state.get("coral_notes")    or [],
+        "coral_attempts":    state.get("coral_attempts") or [],
+        "coral_skills":      state.get("coral_skills")   or [],
+        "critiques":         state.get("critiques")      or [],
+        "debate_transcript": existing_transcript + [{
+            "agent":     "meta_eval",
+            "round":     rounds,
+            "content": (
+                f"Eval Score: {overall_score:.2f} | "
+                f"Feedback: {eval_feedback} | "
+                f"Latency: {ls_metrics.get('latency_ms', 'N/A')}ms | "
+                f"Tokens: {ls_metrics.get('total_tokens', 'N/A')}"
+            ),
+            "timestamp": time.time(),
+        }],
+    }

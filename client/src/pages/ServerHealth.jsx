@@ -4,9 +4,9 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 const API = import.meta.env.VITE_API_URL || 'https://multi-agent-decision-system.onrender.com'
-const FASTAPI = import.meta.env.VITE_FASTAPI_URL || 'http://localhost:8000'
+const FASTAPI = import.meta.env.VITE_FASTAPI_URL || 'https://multi-agent-decision-system.onrender.com'
 const POLL_INTERVAL = 10_000  // re-check every 10s
-
+ 
 // ── individual service check ───────────────────────────────────────────────
 async function checkEndpoint(url, timeout = 5000) {
   const start = Date.now()
@@ -130,7 +130,7 @@ export default function ServerHealth() {
 
     const [nodeHealth, fapiHealth, authCheck] = await Promise.all([
       checkEndpoint(`${API}/health`),
-      checkEndpoint(`${FASTAPI}/health`),
+      checkEndpoint(`${FASTAPI}/api/query/health`),
       checkEndpoint(`${API}/health`)
     ])
 

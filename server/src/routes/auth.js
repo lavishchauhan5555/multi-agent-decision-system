@@ -1,60 +1,64 @@
 // routes/auth.js
-import { Router }      from 'express'
-import bcrypt          from 'bcryptjs'
-import crypto          from 'crypto'
-import rateLimit       from 'express-rate-limit'
+import { Router } from 'express'
+import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
+import rateLimit from 'express-rate-limit'
 import { User, RefreshToken } from '../models/auth.js'
 import {
-  signAccessToken, signRefreshToken, verifyRefreshToken,
-  setRefreshCookie, clearRefreshCookie,
-  requireAuth, REFRESH_EXPIRY_MS,
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+  setAccessCookie,
+  setRefreshCookie,
+  clearAuthCookies,
+  requireAuth,
+  REFRESH_EXPIRY_MS,
 } from '../middleware/auth.js'
 
-const router    = Router()
+const router = Router()
 const hashToken = raw => crypto.createHash('sha256').update(raw).digest('hex')
 
 // ── Rate limiters ─────────────────────────────────────────────────────────
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,   // 15 min window
-  max:      10,                // 10 attempts per IP
-  message:  { error: 'Too many login attempts — try again in 15 minutes' },
+  max: 10,                // 10 attempts per IP
+  message: { error: 'Too many login attempts — try again in 15 minutes' },
   standardHeaders: true,
-  legacyHeaders:   false,
+  legacyHeaders: false,
 })
 
 const signupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,   // 1 hour window
-  max:      5,                 // 5 signups per IP per hour
-  message:  { error: 'Too many accounts created from this IP' },
+  max: 5,                 // 5 signups per IP per hour
+  message: { error: 'Too many accounts created from this IP' },
   standardHeaders: true,
-  legacyHeaders:   false,
+  legacyHeaders: false,
 })
 
 const refreshLimiter = rateLimit({
   windowMs: 60 * 1000,         // 1 min window
-  max:      20,                // 20 refresh calls per min per IP (covers silent refresh)
-  message:  { error: 'Too many refresh requests' },
+  max: 20,                // 20 refresh calls per min per IP (covers silent refresh)
+  message: { error: 'Too many refresh requests' },
   standardHeaders: true,
-  legacyHeaders:   false,
+  legacyHeaders: false,
 })
 
 // ── Issue both tokens ─────────────────────────────────────────────────────
 async function issueTokens(res, user, req) {
-  const accessToken  = signAccessToken(user._id)
+  const accessToken = signAccessToken(user._id)
   const refreshToken = signRefreshToken(user._id)
 
   await RefreshToken.create({
-    userId:    user._id,
+    userId: user._id,
     tokenHash: hashToken(refreshToken),
     expiresAt: new Date(Date.now() + REFRESH_EXPIRY_MS),
     userAgent: req.headers['user-agent'],
-    ip:        req.ip,
+    ip: req.ip,
   })
 
+  setAccessCookie(res, accessToken)
   setRefreshCookie(res, refreshToken)
-   // ✅ ADD THIS DEBUG HERE
-  console.log('LOGIN set cookie token:', refreshToken.slice(0, 20))
-  console.log('LOGIN response header:', res.getHeader('Set-Cookie'))
+
   return accessToken
 }
 
@@ -71,8 +75,8 @@ router.post('/signup', signupLimiter, async (req, res) => {
     if (existing) return res.status(409).json({ error: 'Email already registered' })
 
     const passwordHash = await bcrypt.hash(password, 12)
-    const user         = await User.create({ name, email: email.toLowerCase(), passwordHash })
-    const accessToken  = await issueTokens(res, user, req)
+    const user = await User.create({ name, email: email.toLowerCase(), passwordHash })
+    const accessToken = await issueTokens(res, user, req)
 
     res.status(201).json({
       accessToken,
@@ -95,7 +99,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     // Always run bcrypt even if user not found — prevents timing attacks
     const dummyHash = '$2a$12$dummyhashfortimingattackprevention000000000000000000000'
-    const valid     = user
+    const valid = user
       ? await bcrypt.compare(password, user.passwordHash)
       : await bcrypt.compare(password, dummyHash).then(() => false)
 
@@ -117,8 +121,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 // Returns 200 always — null tokens mean "not logged in", not an error.
 // Proper errors (DB down etc.) return 503 so frontend can retry vs redirect.
 router.post('/refresh', refreshLimiter, async (req, res) => {
-   // ✅ ADD THIS
- 
+  // ✅ ADD THIS
+
   try {
     const rawRefresh = req.cookies?.vantage_refresh
 
@@ -151,17 +155,18 @@ router.post('/refresh', refreshLimiter, async (req, res) => {
     // ── Token rotation — safe because we handle race with the limiter ──────
     // Delete old refresh token, issue new pair (access + refresh)
     await RefreshToken.deleteOne({ _id: stored._id })
-    const newAccessToken  = signAccessToken(user._id)
+    const newAccessToken = signAccessToken(user._id)
     const newRefreshToken = signRefreshToken(user._id)
 
     await RefreshToken.create({
-      userId:    user._id,
+      userId: user._id,
       tokenHash: hashToken(newRefreshToken),
       expiresAt: new Date(Date.now() + REFRESH_EXPIRY_MS),
       userAgent: req.headers['user-agent'],
-      ip:        req.ip,
+      ip: req.ip,
     })
 
+    setAccessCookie(res, newAccessToken)
     setRefreshCookie(res, newRefreshToken)
 
     return res.status(200).json({
@@ -182,7 +187,7 @@ router.post('/logout', async (req, res) => {
     if (rawRefresh) {
       await RefreshToken.deleteOne({ tokenHash: hashToken(rawRefresh) })
     }
-    clearRefreshCookie(res)
+    clearAuthCookies(res)
     res.json({ ok: true })
   } catch (err) {
     console.error('[auth/logout]', err)
@@ -194,7 +199,7 @@ router.post('/logout', async (req, res) => {
 router.post('/logout-all', requireAuth, async (req, res) => {
   try {
     await RefreshToken.deleteMany({ userId: req.user._id })
-    clearRefreshCookie(res)
+    clearAuthCookies(res)
     res.json({ ok: true, message: 'Logged out from all devices' })
   } catch (err) {
     console.error('[auth/logout-all]', err)
@@ -206,5 +211,7 @@ router.post('/logout-all', requireAuth, async (req, res) => {
 router.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user })
 })
+
+
 
 export default router

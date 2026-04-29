@@ -100,7 +100,10 @@ async def start_run(payload: RunRequest, background: BackgroundTasks):
             return
 
         try:
-            async for event in graph.astream(initial_state):
+            async for event in graph.astream(initial_state ,    config={
+                                                        "metadata": {"session_id": session_id},
+                                                        "run_name": session_id,
+                                                         }):
                 node_name   = list(event.keys())[0]
                 node_output = event[node_name]
 

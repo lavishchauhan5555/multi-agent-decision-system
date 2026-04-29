@@ -1,14 +1,15 @@
 // routes/query.js
-import { Router }           from 'express'
-import mongoose             from 'mongoose'
-import { Session }          from '../models/auth.js'
-import { optionalAuth }     from '../middleware/auth.js'
-import { getIO }            from '../socket/io.js'
+import { Router } from 'express'
+import mongoose from 'mongoose'
+import { Session } from '../models/auth.js'
+import { optionalAuth } from '../middleware/auth.js'
+import { getIO } from '../socket/io.js'
 import { runAgentPipeline } from '../agents/pipeline.js'
+import axios from 'axios'
 
 const router = Router()
 
-// Active SSE clients map: sessionId (string) → res
+// Active SSE clients map: sessionId (string) → res 
 const sseClients = new Map()
 
 // ── POST /api/query ────────────────────────────────────────────────────────
@@ -23,23 +24,23 @@ router.post('/', optionalAuth, async (req, res) => {
     }
 
     // Pre-generate ObjectId so sessionId === _id.toString() from birth
-    const _id       = new mongoose.Types.ObjectId()
+    const _id = new mongoose.Types.ObjectId()
     const sessionId = _id.toString()
 
     const session = await Session.create({
       _id,
       sessionId,
-      userId:    req.user?._id ?? null,
-      query:     query.trim(),
+      userId: req.user?._id?.toString() || null,
+      query: query.trim(),
       maxRounds: rounds,           // always stored as camelCase to match schema
       threshold: Number(threshold),
-      status:    'starting',
+      status: 'starting',
     })
 
     // Respond immediately so the frontend can open EventSource
     res.status(202).json({
       sessionId,
-      status:    'starting',
+      status: 'starting',
       streamUrl: `/api/query/stream/${sessionId}`,
     })
 
@@ -51,7 +52,7 @@ router.post('/', optionalAuth, async (req, res) => {
       runAgentPipeline(session, { io, sseClients }).catch(err => {
         console.error('[pipeline] error:', err)
         Session.findByIdAndUpdate(session._id, {
-          status:   'error',
+          status: 'error',
           errorMsg: err.message,
         }).exec()
         emitToSession(sessionId, 'error', { message: err.message })
@@ -62,7 +63,7 @@ router.post('/', optionalAuth, async (req, res) => {
     console.error('[query/post]', err)
     if (err.code === 11000) {
       return res.status(409).json({
-        error:   'Duplicate session key — check your Session schema index',
+        error: 'Duplicate session key — check your Session schema index',
         details: err.keyValue,
       })
     }
@@ -74,9 +75,9 @@ router.post('/', optionalAuth, async (req, res) => {
 router.get('/stream/:sessionId', async (req, res) => {
   const { sessionId } = req.params
 
-  res.setHeader('Content-Type',      'text/event-stream')
-  res.setHeader('Cache-Control',     'no-cache')
-  res.setHeader('Connection',        'keep-alive')
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders()
 
@@ -91,7 +92,7 @@ router.get('/stream/:sessionId', async (req, res) => {
     const session = await Session.findById(sessionId).lean()
     _write(res, session
       ? { type: 'snapshot', data: session }
-      : { type: 'error',    data: { message: 'Session not found' } }
+      : { type: 'error', data: { message: 'Session not found' } }
     )
   } catch {
     _write(res, { type: 'error', data: { message: 'Failed to load session snapshot' } })
@@ -118,7 +119,9 @@ router.get('/status/:sessionId', async (req, res) => {
 // ── GET /api/query/history ─────────────────────────────────────────────────
 router.get('/history', optionalAuth, async (req, res) => {
   try {
-    const filter   = req.user ? { userId: req.user._id } : {}
+    const filter = req.user
+      ? { userId: req.user._id.toString() }
+      : { userId: null }
     const sessions = await Session.find(filter).sort({ createdAt: -1 }).limit(100).lean()
     res.json(sessions)
   } catch (err) {
@@ -143,5 +146,28 @@ export function emitToSession(sessionId, type, data) {
     console.warn('[socket] io not ready:', err.message)
   }
 }
+
+
+const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000'
+
+// - get helth
+router.get('/health', optionalAuth, async (req, res) => {
+  try {
+    const { data } = await axios.get(`${FASTAPI_URL}/health`)
+
+    //  Directly send FastAPI response to frontend
+    return res.json(data)
+
+  } catch (error) {
+    console.error('[Health Error]', error.message)
+
+    return res.status(500).json({
+      status: 'error',
+      service: 'node-backend',
+      fastapi: 'down',
+      message: error.message
+    })
+  }
+})
 
 export default router

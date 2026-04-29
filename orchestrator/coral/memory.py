@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import shutil
+from bson import ObjectId
+from db.mongo import get_sync_collection
 
 
 # ── Root path — relative to orchestrator/ working directory ─────────────────
@@ -46,6 +48,13 @@ class CoralMemory:
             self.clear_old_memory_keep_latest()
         else:
             self._ensure_dirs()
+
+    # ── helper function  ──────────────────────────────────────────────────
+    def _session_object_id(self):
+        try:
+            return ObjectId(self.session_id)
+        except Exception:
+            return None        
 
     # ── Directory bootstrap ──────────────────────────────────────────────────
     def _ensure_dirs(self):
@@ -276,6 +285,19 @@ class CoralMemory:
         )
         path = folder / filename
         path.write_text(frontmatter + f"# {title}\n\n{content}")
+
+        try:
+            notes_col = get_sync_collection("notes")
+
+            notes_col.insert_one({
+                "fileName": filename,
+                "content": content,
+                "sessionId": self._session_object_id(),
+                "agentId": agent_id,
+                "tags": [subfolder] if subfolder else [],
+            })
+        except Exception as exc:
+            print(f"[coral] failed to save note to MongoDB: {exc}")
         return path
 
     def read_all_notes(self, subfolder: str = "") -> list[dict]:
@@ -357,6 +379,18 @@ class CoralMemory:
 
         (folder / "SKILL.md").write_text(skill_md)
         (scripts_dir / "run_skill.py").write_text(script)
+        try:
+            skills_col = get_sync_collection("skills")
+
+            skills_col.insert_one({
+                "name": name,
+                "description": description,
+                "scripts": [script],
+                "connections": [],
+                "sessionId": self._session_object_id(),
+            })
+        except Exception as exc:
+            print(f"[coral] failed to save skill to MongoDB: {exc}")
         return folder
 
     def read_skills(self) -> list[dict]:
